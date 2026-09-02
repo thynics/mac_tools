@@ -4,6 +4,12 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 BUILD_DIR := build
 PROGRAM := $(BUILD_DIR)/cluster-ssh
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+STRIP_FLAGS := -x
+else
+STRIP_FLAGS := --strip-all
+endif
 LAUNCHERS := \
 	$(BUILD_DIR)/dlcluster \
 	$(BUILD_DIR)/computelab \
@@ -17,7 +23,7 @@ all: $(LAUNCHERS)
 $(PROGRAM): cluster_ssh.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@
-	strip -x $@
+	strip $(STRIP_FLAGS) $@
 
 $(LAUNCHERS): $(PROGRAM)
 	cp $(PROGRAM) $@

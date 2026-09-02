@@ -4,7 +4,11 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 BUILD_DIR := build
 PROGRAM := $(BUILD_DIR)/cluster-ssh
-LAUNCHERS := $(BUILD_DIR)/dlcluster $(BUILD_DIR)/computelab
+LAUNCHERS := \
+	$(BUILD_DIR)/dlcluster \
+	$(BUILD_DIR)/computelab \
+	$(BUILD_DIR)/dlcluster-move \
+	$(BUILD_DIR)/computelab-move
 
 .PHONY: all clean install test
 
@@ -22,10 +26,14 @@ install: $(LAUNCHERS)
 	install -d $(BINDIR)
 	install -m 0755 $(BUILD_DIR)/dlcluster $(BINDIR)/dlcluster
 	install -m 0755 $(BUILD_DIR)/computelab $(BINDIR)/computelab
+	install -m 0755 $(BUILD_DIR)/dlcluster-move $(BINDIR)/dlcluster-move
+	install -m 0755 $(BUILD_DIR)/computelab-move $(BINDIR)/computelab-move
 
 test: $(LAUNCHERS)
 	test -x $(BUILD_DIR)/dlcluster
 	test -x $(BUILD_DIR)/computelab
+	test -x $(BUILD_DIR)/dlcluster-move
+	test -x $(BUILD_DIR)/computelab-move
 
 clean:
 	rm -f $(PROGRAM) $(LAUNCHERS)

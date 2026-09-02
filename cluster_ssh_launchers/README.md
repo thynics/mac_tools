@@ -5,6 +5,8 @@ Two compiled local entry points:
 ```text
 dlcluster [remote-command ...]
 computelab [remote-command ...]
+dlcluster-move <remote-path> <local-path>
+computelab-move <remote-path> <local-path>
 ```
 
 Build and install into `~/.local/bin`:

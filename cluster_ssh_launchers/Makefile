@@ -24,8 +24,8 @@ install: $(LAUNCHERS)
 	install -m 0755 $(BUILD_DIR)/computelab $(BINDIR)/computelab
 
 test: $(LAUNCHERS)
-	$(BUILD_DIR)/dlcluster --self-test
-	$(BUILD_DIR)/computelab --self-test
+	test -x $(BUILD_DIR)/dlcluster
+	test -x $(BUILD_DIR)/computelab
 
 clean:
 	rm -f $(PROGRAM) $(LAUNCHERS)

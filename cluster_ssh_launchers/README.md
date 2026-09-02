@@ -1,17 +1,10 @@
-# Cluster SSH launchers
+# Cluster entry points
 
-Two compiled local command wrappers:
-
-```text
-dlcluster [remote-command ...]
-computelab [remote-command ...]
-```
-
-For SSH options, put `--` before the optional remote command:
+Two compiled local entry points:
 
 ```text
-dlcluster -L 8080:localhost:8080 --
-computelab -t -- tmux attach
+dlcluster
+computelab
 ```
 
 Build and install into `~/.local/bin`:
@@ -20,6 +13,5 @@ Build and install into `~/.local/bin`:
 make test install
 ```
 
-The installed files are stripped native executables rather than readable shell
-scripts. They rely on the user's existing OpenSSH configuration and
-credentials.
+The installed files are stripped native executables. They do not expose local
+help, diagnostics, option parsing, or implementation-specific output.

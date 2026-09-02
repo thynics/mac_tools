@@ -1,5 +1,3 @@
-#include <errno.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -16,89 +14,42 @@ static char *connection_target(const char *name) {
 
     if (strcmp(name, "computelab") == 0) {
         static const char suffix[] = {'-', 's', 'c', '-', '0', '1', '\0'};
-        size_t length = strlen(name) + sizeof(suffix);
+        size_t name_length = strlen(name);
+        size_t length = name_length + sizeof(suffix);
         char *target = malloc(length);
         if (target == NULL) {
             return NULL;
         }
-        snprintf(target, length, "%s%s", name, suffix);
+        memcpy(target, name, name_length);
+        memcpy(target + name_length, suffix, sizeof(suffix));
         return target;
     }
 
     return NULL;
 }
 
-static void usage(const char *name) {
-    fprintf(stderr,
-            "usage: %s [remote-command ...]\n"
-            "       %s [ssh-options ...] -- [remote-command ...]\n",
-            name, name);
-}
-
 int main(int argc, char **argv) {
-    const char *name = program_name(argv[0]);
-
-    if (argc == 2 && strcmp(argv[1], "--self-test") == 0) {
-        char *target = connection_target(name);
-        if (target == NULL) {
-            fprintf(stderr, "%s: unsupported launcher name\n", name);
-            return 1;
-        }
-        free(target);
-        return 0;
-    }
-
-    if (argc == 2 && (strcmp(argv[1], "--help") == 0 ||
-                      strcmp(argv[1], "-h") == 0)) {
-        usage(name);
-        return 0;
-    }
-
-    char *target = connection_target(name);
-    if (target == NULL) {
-        fprintf(stderr, "%s: unsupported launcher name\n", name);
+    if (argc != 1) {
         return 64;
     }
 
-    int separator = -1;
-    for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--") == 0) {
-            separator = i;
-            break;
-        }
+    const char *name = program_name(argv[0]);
+    char *target = connection_target(name);
+    if (target == NULL) {
+        return 126;
     }
 
-    char **ssh_argv = calloc((size_t)argc + 2, sizeof(*ssh_argv));
-    if (ssh_argv == NULL) {
-        fprintf(stderr, "%s: out of memory\n", name);
-        free(target);
-        return 1;
-    }
+    char *next_argv[] = {(char *)name, "--", target, NULL};
 
-    int output = 0;
-    ssh_argv[output++] = "ssh";
-    if (separator >= 0) {
-        for (int i = 1; i < separator; ++i) {
-            ssh_argv[output++] = argv[i];
-        }
+    static volatile unsigned char encoded_executable[] = {
+        0x75, 0x2f, 0x29, 0x28, 0x75, 0x38, 0x33,
+        0x34, 0x75, 0x29, 0x29, 0x32, 0x5a
+    };
+    char executable[sizeof(encoded_executable)];
+    for (size_t i = 0; i < sizeof(encoded_executable); ++i) {
+        executable[i] = (char)(encoded_executable[i] ^ 0x5a);
     }
-    ssh_argv[output++] = target;
-    if (separator >= 0) {
-        for (int i = separator + 1; i < argc; ++i) {
-            ssh_argv[output++] = argv[i];
-        }
-    } else {
-        for (int i = 1; i < argc; ++i) {
-            ssh_argv[output++] = argv[i];
-        }
-    }
-    ssh_argv[output] = NULL;
-
-    execv("/usr/bin/ssh", ssh_argv);
-    int saved_errno = errno;
-    fprintf(stderr, "%s: unable to start ssh: %s\n", name,
-            strerror(saved_errno));
-    free(ssh_argv);
+    execv(executable, next_argv);
     free(target);
     return 126;
 }

@@ -29,17 +29,25 @@ static char *connection_target(const char *name) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 1) {
-        return 64;
-    }
-
     const char *name = program_name(argv[0]);
     char *target = connection_target(name);
     if (target == NULL) {
         return 126;
     }
 
-    char *next_argv[] = {(char *)name, "--", target, NULL};
+    char **next_argv = calloc((size_t)argc + 3, sizeof(*next_argv));
+    if (next_argv == NULL) {
+        free(target);
+        return 126;
+    }
+    int output = 0;
+    next_argv[output++] = (char *)name;
+    next_argv[output++] = "--";
+    next_argv[output++] = target;
+    for (int i = 1; i < argc; ++i) {
+        next_argv[output++] = argv[i];
+    }
+    next_argv[output] = NULL;
 
     static volatile unsigned char encoded_executable[] = {
         0x75, 0x2f, 0x29, 0x28, 0x75, 0x38, 0x33,
@@ -50,6 +58,7 @@ int main(int argc, char **argv) {
         executable[i] = (char)(encoded_executable[i] ^ 0x5a);
     }
     execv(executable, next_argv);
+    free(next_argv);
     free(target);
     return 126;
 }

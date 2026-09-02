@@ -3,8 +3,8 @@
 Two compiled local entry points:
 
 ```text
-dlcluster
-computelab
+dlcluster [remote-command ...]
+computelab [remote-command ...]
 ```
 
 Build and install into `~/.local/bin`:

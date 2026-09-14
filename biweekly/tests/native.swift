@@ -14,6 +14,13 @@ extension AppDelegate {
                     try await Task.sleep(nanoseconds: 100_000_000)
                 }
                 guard ready else { throw NSError(domain: "Test", code: 1, userInfo: [NSLocalizedDescriptionKey: "WebKit did not initialize"]) }
+                var saved = false
+                for _ in 0..<40 {
+                    let label = try await webView.evaluateJavaScript("document.querySelector('#save-label').textContent")
+                    if (label as? String)?.contains("已保存") == true { saved = true; break }
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                }
+                guard saved else { throw NSError(domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "Native save acknowledgement did not arrive"]) }
                 let readback = CommandLine.arguments.contains("--readback")
                 if readback {
                     let found = try await webView.evaluateJavaScript("Array.from(document.querySelectorAll('.task-title')).some(x=>x.textContent==='Native persistence check')")

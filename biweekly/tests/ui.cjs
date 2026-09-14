@@ -36,6 +36,20 @@ const {chromium}=require('playwright');const assert=require('node:assert/strict'
  await page.locator('[data-collapse]').first().click();assert.equal(await page.locator('.task-row').count(),total-4);
  await page.locator('#focus-doing').click();assert.equal(await page.locator('.task-row.doing').count(),3);assert.equal(await page.locator('.task-row').count(),6);
  await page.locator('.task-row.doing .task-title').first().click();assert.match(await page.locator('#note-rendered').innerText(),/测试记录/);
+ // A paste event carrying an image should insert at the note cursor, render and survive reload.
+ await page.locator('#note-edit').click();await page.locator('#note-editor').fill('before AFTER');
+ await page.evaluate(async()=>{
+   const editor=document.querySelector('#note-editor');editor.setSelectionRange(7,7);
+   const canvas=document.createElement('canvas');canvas.width=160;canvas.height=60;
+   const ctx=canvas.getContext('2d');ctx.fillStyle='#7061cd';ctx.fillRect(0,0,160,60);ctx.fillStyle='white';ctx.fillText('IMAGE NOTE',12,34);
+   const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png')),dt=new DataTransfer();dt.items.add(new File([blob],'clipboard.png',{type:'image/png'}));
+   editor.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:dt}));
+ });
+ await page.waitForFunction(()=>document.querySelector('#note-rendered img')?.naturalWidth===160);
+ assert.match(await page.evaluate(()=>selected().notes),/^before \n\n!\[图片\]/);assert.match(await page.evaluate(()=>selected().notes),/AFTER$/);
+ await page.locator('#note-rendered img').click();assert.equal(await page.locator('#modal.image-viewer').isVisible(),true);await page.locator('#modal [data-dismiss]').click();
+ await page.evaluate(()=>window.BiweeklyNative.flush());await page.reload();await page.waitForFunction(()=>window.__ready);
+ await page.locator('#focus-doing').click();await page.locator('.task-row.doing .task-title').first().click();await page.waitForFunction(()=>document.querySelector('#note-rendered img')?.naturalWidth===160);
  await page.locator('#note-edit').click();await page.locator('#note-editor').fill('## 新笔记\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```js\nconst a = 1;\n```\n\n<script>window.XSS=true</script><img src=x onerror="window.XSS=true">');await page.locator('#note-preview').click();
  assert.equal(await page.locator('#note-rendered table').count(),1);assert.equal(await page.locator('#note-rendered pre').count(),1);assert.equal(await page.evaluate(()=>!!window.XSS),false);
  await page.locator('#detail-add-child').click();await page.locator('#child-title').fill('动态子任务');await page.locator('#child-form .primary').click();

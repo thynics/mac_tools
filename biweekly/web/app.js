@@ -171,9 +171,9 @@ function renderDetail(){
     ${isCycle?'<h2 class="detail-title">双周笔记</h2>':`<textarea id="detail-title" class="detail-title title-input" rows="1" aria-label="任务标题" ${readOnly?'readonly':''}>${esc(target.title)}</textarea>`}
     ${!isCycle?`<div class="detail-properties"><span>状态</span><select id="detail-status" class="status-select" aria-label="任务状态" ${readOnly?'disabled':''}>${['todo','doing','done'].map(s=>`<option value="${s}" ${s===target.status?'selected':''}>${{todo:'○ Todo',doing:'◉ Doing',done:'✓ Done'}[s]}</option>`).join('')}</select></div>`:''}
     <div class="note-toolbar"><span>笔记 / MARKDOWN</span><div class="segmented"><button id="note-preview" class="${!editing?'active':''}">预览</button>${!readOnly?`<button id="note-edit" class="${editing?'active':''}">编辑</button>`:''}</div></div>
-    ${editing&&!readOnly?`<textarea id="note-editor" class="note-editor" aria-label="Markdown 笔记" placeholder="粘贴 Markdown，或直接写下想法…\n\n## 标题\n- [ ] 待办\n\n支持代码块、表格与链接">${esc(target.notes)}</textarea>`:`<div class="markdown" id="note-rendered">${target.notes?noteHTML(target.notes):'<div class="note-empty">为任务留一些上下文。<br>点击「编辑」，粘贴或输入 Markdown。</div>'}</div>`}
-    ${!readOnly?`<div class="detail-actions"><button id="insert-md" class="quiet">↓ 插入 .md</button>${!isCycle?'<button id="detail-add-child" class="quiet">＋ 子任务</button><button id="task-more" class="quiet">更多 ···</button>':''}</div>`:''}
-    <p class="detail-tip">${readOnly?'已保存此双周的任务与笔记。':'笔记自动保存 · 支持标题、列表、表格、代码块'}<br>${!isCycle?'每个任务独立记录状态，父任务不会自动完成。':''}</p>`;
+    ${editing&&!readOnly?`<textarea id="note-editor" class="note-editor" aria-label="Markdown 笔记" placeholder="粘贴 Markdown，或直接写下想法…\n\n## 标题\n- [ ] 待办\n\n支持代码块、表格与链接">${esc(target.notes)}</textarea>`:`<div class="markdown" id="note-rendered">${target.notes?noteHTML(target.notes):'<div class="note-empty">为任务留一些上下文。<br>粘贴图片（⌘V），或点击「编辑」写 Markdown。</div>'}</div>`}
+    ${!readOnly?`<div class="detail-actions"><button id="paste-image" class="quiet" title="复制截图或图片后按 ⌘V">▧ 粘贴图片</button><button id="insert-md" class="quiet">↓ 插入 .md</button>${!isCycle?'<button id="detail-add-child" class="quiet">＋ 子任务</button><button id="task-more" class="quiet">更多 ···</button>':''}</div>`:''}
+    <p class="detail-tip">${readOnly?'已保存此双周的任务与笔记。':'⌘V 粘贴图片 · 点击图片可放大 · 自动保存'}<br>${!isCycle?'每个任务独立记录状态，父任务不会自动完成。':''}</p>`;
   $('#close-detail').onclick=()=>{selectedId=null;renderDetail();renderTasks();};
   fitDetailTitle();
   $('#detail-title')?.addEventListener('focus',snapshot);
@@ -184,13 +184,14 @@ function renderDetail(){
   $('#note-preview').onclick=()=>{editing=false;renderDetail();};
   $('#note-editor')?.addEventListener('focus',snapshot);
   $('#note-editor')?.addEventListener('input',e=>{target.notes=e.target.value;persist();});
+  $('#paste-image')?.addEventListener('click',()=>requestImagePaste(true));
   $('#insert-md')?.addEventListener('click',()=>post('importMarkdown',{target:'note'}));
   $('#detail-add-child')?.addEventListener('click',()=>addChild(selectedId));
   $('#task-more')?.addEventListener('click',()=>taskMore(selectedId));
   $$('#note-rendered input').forEach(el=>{if(el.type!=='checkbox')el.remove();else el.disabled=true;});
 }
 function renderAll(){renderSidebar();renderHeader();renderTasks();renderDetail();}
-function showModal(html){$('#modal-content').innerHTML=html;$('#modal').showModal();$$('[data-dismiss]').forEach(b=>b.onclick=()=>$('#modal').close());}
+function showModal(html){$('#modal').classList.remove('image-viewer');$('#modal-content').innerHTML=html;$('#modal').showModal();$$('[data-dismiss]').forEach(b=>b.onclick=()=>$('#modal').close());}
 function closeModal(){$('#modal').close();}
 function addChild(id){
   const t=B.find(current().tasks,id);if(!t||current().archived)return;
@@ -218,18 +219,20 @@ function openArchive(){
  $('#confirm-archive').onclick=()=>{snapshot();const next=B.nextCycle(state,$('#carry-next').checked);cycleId=next.id;selectedId=null;filter='all';query='';$('#search').value='';changed();closeModal();toast('双周已归档，新双周已开启',true);};
 }
 function settings(){
- showModal(`<h2>偏好与备份</h2><div class="settings-group"><h3>双周自动归档</h3><label><input id="auto-carry" type="checkbox" ${state.settings.carryUnfinished?'checked':''}> 新双周自动延续未完成任务</label><p>以当前双周的开始日期为锚点，每 14 天归档。App 打开或运行时自动检查，归档仍可浏览与导出。</p><label>当前双周开始 <input id="start-date" type="date" value="${active().start}"></label><p id="date-error" class="error-text"></p></div><div class="settings-group"><h3>数据保存在本机</h3><p class="mono">${esc(diskPath||'浏览器本地存储（预览模式）')}</p><div class="backup-actions"><button id="backup-export" class="secondary">导出完整备份</button><button id="backup-restore" class="secondary">恢复备份…</button><button id="data-folder" class="secondary">打开数据目录</button></div><p>完整备份包含所有双周。每天保留一份自动备份，最多 14 份。</p></div><div class="settings-group"><h3>快捷键</h3><p>⌘ 1 专注 Doing　⌘ 0 全部任务　⌘ N 新任务<br>⌘ F 搜索　⌘ I 导入 Markdown　⌘ Z 撤销</p></div><div class="modal-actions"><button class="secondary" data-dismiss>取消</button><button id="save-settings" class="primary">保存设置</button></div>`);
+ showModal(`<h2>偏好与备份</h2><div class="settings-group"><h3>双周自动归档</h3><label><input id="auto-carry" type="checkbox" ${state.settings.carryUnfinished?'checked':''}> 新双周自动延续未完成任务</label><p>以当前双周的开始日期为锚点，每 14 天归档。App 打开或运行时自动检查，归档仍可浏览与导出。</p><label>当前双周开始 <input id="start-date" type="date" value="${active().start}"></label><p id="date-error" class="error-text"></p></div><div class="settings-group"><h3>数据保存在本机</h3><p class="mono">${esc(diskPath||'浏览器本地存储（预览模式）')}</p><div class="backup-actions"><button id="backup-export" class="secondary">导出完整备份</button><button id="backup-restore" class="secondary">恢复备份…</button><button id="data-folder" class="secondary">打开数据目录</button></div><p>完整备份包含所有双周。每天保留一份自动备份，最多 14 份。</p></div>${gitSettingsHTML()}<div class="settings-group"><h3>快捷键</h3><p>⌘ 1 专注 Doing　⌘ 0 全部任务　⌘ N 新任务<br>⌘ F 搜索　⌘ I 导入 Markdown　⌘ Z 撤销</p></div><div class="modal-actions"><button class="secondary" data-dismiss>取消</button><button id="save-settings" class="primary">保存双周设置</button></div>`);
+ bindGitSettings();
  $('#save-settings').onclick=()=>{const date=$('#start-date').value;try{const candidate=structuredClone(state);candidate.settings.carryUnfinished=$('#auto-carry').checked;candidate.cycles.find(c=>!c.archived).start=date;B.validate(candidate);snapshot();state=candidate;changed();closeModal();toast('设置已保存');}catch(e){$('#date-error').textContent=e.message;}};
  $('#backup-export').onclick=()=>{flush();post('export',{name:'Biweekly-backup-'+B.key()+'.json',content:JSON.stringify(state,null,2)});};
  $('#backup-restore').onclick=()=>post('restoreBackup');$('#data-folder').onclick=()=>post('showDataFolder');
 }
 function checkRollover(){if(!state||locked||$('#modal').open)return;if(B.rollover(state)){history=[];cycleId=active().id;selectedId=null;changed();toast('新的双周开始了，上个双周已自动归档。');}}
 window.BiweeklyNative={
+ pasteImageCommand:requestImagePaste,imagePasted:receiveImagePaste,gitStatus:receiveGitStatus,
  bootstrap(data,info={}){if(nativeReady)return;nativeReady=true;diskPath=info.path||'';try{state=data?B.validate(data):B.initial();B.rollover(state);cycleId=active().id;renderAll();persist();if(info.warning)toast(info.warning);}catch(e){locked=true;$('#task-list').innerHTML=`<div class="empty"><strong>数据暂时无法读取</strong>${esc(e.message)}<br>请通过「偏好与备份」恢复 JSON 备份。</div>`;state=B.initial();cycleId=state.cycles[0].id;renderSidebar();$('#save-label').textContent='数据读取失败 · 已停止写入';}window.__ready=true;},
  saved(revision,error){if(error){$('#save-label').textContent='保存失败';toast(error);}else if(revision===saveRevision)$('#save-label').textContent='本地存储 · 已保存';},
  imported(text,name,target){importedFilename=name;if(target==='note'&&selected()&&!current().archived){mutate(()=>selected().notes=[selected().notes,text].filter(Boolean).join('\n\n'));editing=false;renderDetail();toast('Markdown 已插入笔记');}else if($('#modal').open&&$('#import-text')){$('#import-text').value=text;$('#import-text').dispatchEvent(new Event('input'));}else openImport(text);},
- restore(text){try{const candidate=B.validate(JSON.parse(text));showModal(`<h2>恢复完整备份</h2><p>备份包含 ${candidate.cycles.length} 个双周、${candidate.cycles.reduce((n,c)=>n+B.counts(c.tasks).total,0)} 个任务。恢复会替换当前数据，当前内容将先保存为独立备份。</p><div class="modal-actions"><button class="secondary" data-dismiss>取消</button><button id="restore-confirm" class="primary">恢复这份备份</button></div>`);$('#restore-confirm').onclick=()=>{pendingRestore=candidate;$('#restore-confirm').disabled=true;if(native)post('beforeRestore');else window.BiweeklyNative.restorePrepared(null);};}catch(e){toast('无法恢复：'+e.message);}},
- restorePrepared(error){if(error){pendingRestore=null;toast(error);$('#restore-confirm').disabled=false;return;}if(!pendingRestore)return;snapshot();state=pendingRestore;pendingRestore=null;locked=false;B.rollover(state);cycleId=active().id;selectedId=null;filter='all';query='';$('#search').value='';changed();flush();closeModal();toast('备份已恢复',true);},
+ restore(text){try{const candidate=B.validate(JSON.parse(text));showModal(`<h2>恢复完整备份</h2><p>备份包含 ${candidate.cycles.length} 个双周、${candidate.cycles.reduce((n,c)=>n+B.counts(c.tasks).total,0)} 个任务。恢复会替换当前数据，当前内容将先保存为独立备份。</p><div class="modal-actions"><button class="secondary" data-dismiss>取消</button><button id="restore-confirm" class="primary">恢复这份备份</button></div>`);$('#restore-confirm').onclick=()=>{pendingRestore=candidate;$('#restore-confirm').disabled=true;if(native)post('beforeRestore',{data:JSON.stringify(pendingRestore)});else window.BiweeklyNative.restorePrepared(null);};}catch(e){toast('无法恢复：'+e.message);}},
+ restorePrepared(error,preparedState){if(error){pendingRestore=null;toast(error);$('#restore-confirm').disabled=false;return;}if(!pendingRestore)return;if(preparedState)pendingRestore=B.validate(preparedState);snapshot();state=pendingRestore;pendingRestore=null;locked=false;B.rollover(state);cycleId=active().id;selectedId=null;filter='all';query='';$('#search').value='';changed();flush();closeModal();toast('备份已恢复',true);},
  command(name){if(!state)return;const actions={import:()=>openImport(),export:()=>$('#export-btn').click(),new:()=>{$('#new-task').focus();},doing:()=>$('#focus-doing').click(),all:()=>{filter='all';renderAll();},search:()=>$('#search').focus(),settings,undo:undoChange};actions[name]?.();},
  flush,error:toast
 };
@@ -237,6 +240,7 @@ $('#quick-add').onsubmit=e=>{e.preventDefault();const title=$('#new-task').value
 $('#focus-doing').onclick=()=>{cycleId=active().id;filter='doing';query='';$('#search').value='';selectedId=null;renderAll();};
 $$('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;renderHeader();renderTasks();});
 $('#search').oninput=e=>{query=e.target.value;renderTasks();};
+$('#git-status-btn').onclick=()=>{if(gitInfo.enabled){flush();post('gitSync');}else settings();};
 $('#import-btn').onclick=()=>openImport();$('#archive-btn').onclick=openArchive;$('#settings-btn').onclick=settings;
 $('#export-btn').onclick=()=>post('export',{name:current().start+'-双周.md',content:MarkdownIO.exportMarkdown(current())});
 $('#expand-all').onclick=()=>{B.walk(current().tasks,t=>t.collapsed=false);persist();renderTasks();};
@@ -244,7 +248,7 @@ $('#collapse-all').onclick=()=>{if(filter!=='all'||query){toast('切回「全部
 $('#cycle-notes-btn').onclick=()=>{selectedId='cycle';editing=false;renderDetail();renderTasks();};
 $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){const rect=$('#modal').getBoundingClientRect();if(e.clientX<rect.left||e.clientX>rect.right||e.clientY<rect.top||e.clientY>rect.bottom)closeModal();}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){selectedId=null;renderDetail();renderTasks();}if(!(e.metaKey||e.ctrlKey))return;const typing=/INPUT|TEXTAREA/.test(document.activeElement.tagName);if(e.key==='z'&&typing)return;if($('#modal').open)return;const commands={'1':'doing','0':'all',n:'new',f:'search',i:'import',',':'settings',z:'undo'};if(commands[e.key]){e.preventDefault();window.BiweeklyNative.command(commands[e.key]);}});
-document.addEventListener('click',e=>{const link=e.target.closest('.markdown a');if(link){e.preventDefault();post('openURL',{url:link.href});}});
+document.addEventListener('click',e=>{const link=e.target.closest('.markdown a');if(link&&!e.target.closest('img')){e.preventDefault();post('openURL',{url:link.href});}});
 window.addEventListener('blur',flush);window.addEventListener('focus',checkRollover);setInterval(checkRollover,60000);
 window.addEventListener('beforeunload',flush);
 if(native)post('load');else{let data;try{data=JSON.parse(localStorage.getItem('biweekly-state'));}catch{}window.BiweeklyNative.bootstrap(data);}

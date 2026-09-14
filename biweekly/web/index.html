@@ -2,9 +2,9 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: biweekly-image:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <title>双周 · Biweekly</title><link rel="stylesheet" href="style.css">
-<script defer src="vendor/marked.js"></script><script defer src="vendor/purify.js"></script><script defer src="model.js"></script><script defer src="markdown.js"></script><script defer src="app.js"></script>
+<script defer src="vendor/marked.js"></script><script defer src="vendor/purify.js"></script><script defer src="model.js"></script><script defer src="markdown.js"></script><script defer src="images.js"></script><script defer src="git-ui.js"></script><script defer src="app.js"></script>
 </head>
 <body>
 <div id="app">
@@ -13,7 +13,7 @@
   <button id="focus-doing" class="focus-button"><span class="status-dot doing"></span><span>专注 Doing</span><kbd>⌘ 1</kbd><b id="global-doing">0</b></button>
   <div class="section-label">工作周期 <span>14 DAYS</span></div>
   <nav id="cycles" aria-label="双周列表"></nav>
-  <div class="sidebar-bottom"><div class="local-indicator"><span></span><span id="save-label" role="status">本地存储 · 自动保存</span></div><button id="settings-btn" class="quiet full"><span>⚙</span> 偏好与备份 <span class="key-hint">⌘ ,</span></button></div>
+  <div class="sidebar-bottom"><div class="local-indicator"><span></span><span id="save-label" role="status">本地存储 · 自动保存</span></div><button id="git-status-btn" class="quiet full git-status">↥ 设置 Git 备份</button><button id="settings-btn" class="quiet full"><span>⚙</span> 偏好与备份 <span class="key-hint">⌘ ,</span></button></div>
 </aside>
 <main>
   <header class="topbar"><div class="breadcrumb">我的工作台 <span>/</span> <b id="breadcrumb-period">当前双周</b></div><div class="top-actions"><button id="import-btn" class="quiet">↓ 导入 Markdown</button><button id="export-btn" class="quiet" title="导出当前双周为 Markdown">↑ 导出</button></div></header>

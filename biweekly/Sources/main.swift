@@ -6,6 +6,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var window: NSWindow!
     var webView: WKWebView!
     var dataDirectory: URL!
+    var imageStore: ImageStore!
+    var gitBackup: GitBackup!
+    #if UI_TESTS
+    var testPasteboard: NSPasteboard?
+    #endif
     var saveBlocked = false
     var terminating = false
     var pendingFiles: [URL] = []
@@ -22,11 +27,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
         do { try fm.createDirectory(at: dataDirectory, withIntermediateDirectories: true) }
         catch { fatalAlert("无法创建数据目录：\(error.localizedDescription)"); return }
+        imageStore = ImageStore(root: dataDirectory)
+        gitBackup = GitBackup(root: dataDirectory, images: imageStore)
+        gitBackup.onStatus = { [weak self] info in self?.call("gitStatus", [info]) }
         let content = WKUserContentController()
         content.add(self, name: "bridge")
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = content
         configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(imageStore, forURLScheme: "biweekly-image")
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
@@ -70,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         edit.addItem(withTitle: "撤销", action: #selector(undoAction), keyEquivalent: "z")
         let redo = edit.addItem(withTitle: "重做文字编辑", action: Selector(("redo:")), keyEquivalent: "z"); redo.keyEquivalentModifierMask = [.command, .shift]
         edit.addItem(.separator())
-        for (title, action, key) in [("剪切", "cut:", "x"), ("复制", "copy:", "c"), ("粘贴", "paste:", "v"), ("全选", "selectAll:", "a")] { edit.addItem(withTitle: title, action: Selector(action), keyEquivalent: key) }
+        for (title, action, key) in [("剪切", "cut:", "x"), ("复制", "copy:", "c"), ("粘贴", "paste:", "v"), ("全选", "selectAll:", "a")] { let item = edit.addItem(withTitle: title, action: action == "paste:" ? #selector(smartPaste) : Selector(action), keyEquivalent: key); if action == "paste:" { item.target = self } }
         let search = edit.addItem(withTitle: "搜索任务", action: #selector(command(_:)), keyEquivalent: "f"); search.representedObject = "search"
         let viewItem = NSMenuItem(); viewItem.title = "视图"; menu.addItem(viewItem)
         let view = NSMenu(title: "视图"); viewItem.submenu = view
@@ -84,8 +93,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             else { self.call("command", ["undo"]) }
         }
     }
+    var imagePasteboard: NSPasteboard {
+        #if UI_TESTS
+        if let board = testPasteboard { return board }
+        #endif
+        return .general
+    }
+    @objc func smartPaste() {
+        if imageStore.hasClipboardImage(imagePasteboard) {
+            webView.evaluateJavaScript("window.BiweeklyNative.pasteImageCommand()") { handled, _ in
+                if handled as? Bool != true { _ = NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) }
+            }
+        } else { _ = NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) }
+    }
+    func restoreFile(_ url: URL) throws -> String {
+        let text = try readText(url, limit: 200_000_000)
+        guard let bytes = text.data(using: .utf8), var object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { throw biweeklyError("备份格式无效。") }
+        if object["imageAttachments"] == nil {
+            var attachments: [String: String] = [:]
+            var size = text.utf8.count
+            for name in imageStore.names(in: text) {
+                let file = url.deletingLastPathComponent().appendingPathComponent("images").appendingPathComponent(name)
+                if fm.fileExists(atPath: file.path) {
+                    let data = try Data(contentsOf: file); size += data.count * 4 / 3
+                    guard size <= 200_000_000 else { throw biweeklyError("包含图片的备份超过 200 MB。") }
+                    attachments[name] = data.base64EncodedString()
+                }
+            }
+            if !attachments.isEmpty { object["imageAttachments"] = attachments }
+        }
+        return String(data: try JSONSerialization.data(withJSONObject: object, options: .withoutEscapingSlashes), encoding: .utf8)!
+    }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "双周 · Biweekly", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0", .credits: NSAttributedString(string: "每两周，专注正在发生的事。\n本地任务 · Markdown · 双周归档")])
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "双周 · Biweekly", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.0", .credits: NSAttributedString(string: "每两周，专注正在发生的事。\n本地任务 · Markdown · 双周归档")])
     }
     func call(_ method: String, _ args: [Any] = []) {
         guard let json = try? JSONSerialization.data(withJSONObject: args, options: [.fragmentsAllowed]), let text = String(data: json, encoding: .utf8) else { return }
@@ -111,6 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         } catch { saveBlocked = true; object = ["version": -1]; warning = error.localizedDescription }
         call("bootstrap", [object, ["path": dataDirectory.path, "warning": warning]])
         for url in pendingFiles { importFile(url, target: "tasks") }; pendingFiles.removeAll()
+        gitBackup.start()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.gitBackup.sync() }
     }
     func backupBeforeWrite() throws {
         guard fm.fileExists(atPath: storeURL.path) else { return }
@@ -135,6 +177,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard let text = body["data"] as? String, let data = text.data(using: .utf8), data.count <= 50_000_000, validData(data) else { call("saved", [revision, "数据格式无效或超过 50 MB。"]); return }
             do { try backupBeforeWrite(); try data.write(to: storeURL, options: [.atomic]); call("saved", [revision, NSNull()]) }
             catch { call("saved", [revision, "保存失败：\(error.localizedDescription)"]) }
+        case "pasteImage":
+            guard let request = body["request"] as? String else { return }
+            do {
+                guard !saveBlocked else { throw biweeklyError("数据暂时无法写入，请先恢复备份。") }
+                call("imagePasted", [request, try imageStore.clipboardImage(imagePasteboard), NSNull()])
+            } catch { call("imagePasted", [request, NSNull(), error.localizedDescription]) }
+        case "gitSync": gitBackup.sync()
+        case "configureGit":
+            do {
+                guard let enabled = body["enabled"] as? Bool, let remote = body["remote"] as? String, let interval = body["intervalMinutes"] as? Int else { throw biweeklyError("Git 备份设置无效。") }
+                try gitBackup.configure(enabled: enabled, remote: remote, interval: interval)
+                call("error", ["Git 备份设置已保存"])
+            } catch { call("error", [error.localizedDescription]) }
         case "importMarkdown":
             let panel = NSOpenPanel(); panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText, .plainText]; panel.allowsMultipleSelection = false
             panel.beginSheetModal(for: window) { response in if response == .OK, let url = panel.url { self.importFile(url, target: body["target"] as? String ?? "tasks") } }
@@ -142,18 +197,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard let content = body["content"] as? String, let name = body["name"] as? String else { return }
             let panel = NSSavePanel(); panel.nameFieldStringValue = name; panel.canCreateDirectories = true
             panel.beginSheetModal(for: window) { response in
-                if response == .OK, let url = panel.url { do { try content.write(to: url, atomically: true, encoding: .utf8); self.call("error", ["已导出 \(url.lastPathComponent)"]) } catch { self.call("error", [error.localizedDescription]) } }
+                if response == .OK, let url = panel.url { do { let output = name.hasSuffix(".json") ? try self.imageStore.backup(content) : try self.imageStore.portableMarkdown(content); try output.write(to: url, atomically: true, encoding: .utf8); self.call("error", ["已导出 \(url.lastPathComponent)"]) } catch { self.call("error", [error.localizedDescription]) } }
             }
         case "restoreBackup":
             let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.allowsMultipleSelection = false
             panel.beginSheetModal(for: window) { response in
-                if response == .OK, let url = panel.url { do { let data = try self.readText(url, limit: 50_000_000); self.call("restore", [data]) } catch { self.call("error", [error.localizedDescription]) } }
+                if response == .OK, let url = panel.url { do { let data = try self.restoreFile(url); self.call("restore", [data]) } catch { self.call("error", [error.localizedDescription]) } }
             }
         case "beforeRestore":
             do {
+                guard let text = body["data"] as? String else { throw biweeklyError("缺少待恢复的数据。") }
+                let prepared = try imageStore.prepareRestore(text)
                 if fm.fileExists(atPath: storeURL.path) { try fm.copyItem(at: storeURL, to: dataDirectory.appendingPathComponent("before-restore-\(UUID().uuidString).json")) }
+                try imageStore.install(prepared.images)
                 saveBlocked = false
-                call("restorePrepared", [NSNull()])
+                call("restorePrepared", [NSNull(), prepared.state])
             } catch { call("restorePrepared", ["恢复前备份失败：\(error.localizedDescription)"]) }
         case "showDataFolder": NSWorkspace.shared.open(dataDirectory)
         case "openURL":
@@ -161,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         default: break
         }
     }
-    func readText(_ url: URL, limit: Int = 10_000_000) throws -> String {
+    func readText(_ url: URL, limit: Int = 50_000_000) throws -> String {
         let attrs = try fm.attributesOfItem(atPath: url.path)
         if (attrs[.size] as? NSNumber)?.intValue ?? 0 > limit { throw NSError(domain: "Biweekly", code: 1, userInfo: [NSLocalizedDescriptionKey: "文件超过 \(limit / 1_000_000) MB，请拆分后导入。"] ) }
         return try String(contentsOf: url, encoding: .utf8)

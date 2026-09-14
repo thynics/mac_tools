@@ -27,6 +27,13 @@ extension AppDelegate {
                     guard found as? Bool == true else { throw NSError(domain: "Test", code: 2, userInfo: [NSLocalizedDescriptionKey: "Task was not persisted across native launches"]) }
                     let order = try await webView.evaluateJavaScript("current().tasks.at(-2).title === 'Native persistence check'")
                     guard order as? Bool == true else { throw NSError(domain: "Test", code: 9, userInfo: [NSLocalizedDescriptionKey: "Reordered task did not retain its position after restart"]) }
+                    _ = try await webView.evaluateJavaScript("document.querySelector('.task-row.doing .task-title').click(); true")
+                    var pictureLoaded = false
+                    for _ in 0..<30 {
+                        if (try await webView.evaluateJavaScript("document.querySelector('#note-rendered img')?.naturalWidth > 0")) as? Bool == true { pictureLoaded = true; break }
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                    guard pictureLoaded else { throw biweeklyError("Image was not restored after native restart") }
                     let stored = try Data(contentsOf: storeURL)
                     guard String(data: stored, encoding: .utf8)!.contains("Native persistence check") else { throw NSError(domain: "Test", code: 3) }
                 } else {
@@ -45,6 +52,7 @@ extension AppDelegate {
                     """)
                     guard reordered as? Bool == true else { throw NSError(domain: "Test", code: 8, userInfo: [NSLocalizedDescriptionKey: "WebKit drag handlers failed to reorder the task group"]) }
                     _ = try await webView.evaluateJavaScript("document.querySelector('.task-row.doing .task-title').click(); true")
+                    try await verifyImageNotes()
                     let screenshot = try await webView.takeSnapshot(configuration: nil)
                     let png = NSBitmapImageRep(data: screenshot.tiffRepresentation!)!.representation(using: .png, properties: [:])!
                     try png.write(to: directory.appendingPathComponent("native-preview.png"))
@@ -72,4 +80,43 @@ extension AppDelegate {
             }
         }
     }
+    @MainActor func verifyImageNotes() async throws {
+        let board = NSPasteboard.withUniqueName(); testPasteboard = board
+        defer { board.releaseGlobally(); testPasteboard = nil }
+        let fixture = NSImage(size: NSSize(width: 320, height: 120))
+        fixture.lockFocus()
+        NSColor(calibratedRed: 0.44, green: 0.38, blue: 0.8, alpha: 1).setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 320, height: 120)).fill()
+        ("Image note · local backup" as NSString).draw(at: NSPoint(x: 24, y: 48), withAttributes: [.foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 18)])
+        fixture.unlockFocus()
+        let png = NSBitmapImageRep(data: fixture.tiffRepresentation!)!.representation(using: .png, properties: [:])!
+        board.setData(png, forType: .png)
+        smartPaste()
+        var loaded = false
+        for _ in 0..<40 {
+            if (try await webView.evaluateJavaScript("document.querySelector('#note-rendered img')?.naturalWidth > 0")) as? Bool == true { loaded = true; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard loaded else { throw biweeklyError("Native clipboard image did not load through the local URL handler") }
+        let text = try await webView.evaluateJavaScript("JSON.stringify(state)") as! String
+        guard text.contains(ImageStore.prefix), !text.contains("base64") else { throw biweeklyError("Image should be a local attachment, not inline data") }
+        let names = imageStore.names(in: text)
+        guard names.count == 1 else { throw biweeklyError("Missing image attachment") }
+        _ = try imageStore.clipboardImage(board)
+        guard try fm.contentsOfDirectory(atPath: imageStore.directory.path).count == 1 else { throw biweeklyError("Duplicate image data was not deduplicated") }
+        let backup = try imageStore.backup(text)
+        let fresh = ImageStore(root: dataDirectory.appendingPathComponent("fresh-restore"))
+        let restored = try fresh.prepareRestore(backup); try fresh.install(restored.images)
+        guard restored.state["imageAttachments"] == nil, restored.images.count == 1,
+              try fresh.data(names.first!) == imageStore.data(names.first!) else { throw biweeklyError("Portable image backup did not restore independently") }
+        let md = try await webView.evaluateJavaScript("MarkdownIO.exportMarkdown(current())") as! String
+        let portable = try imageStore.portableMarkdown(md)
+        guard portable.contains("data:image/png;base64,"), !portable.contains(ImageStore.prefix) else { throw biweeklyError("Markdown export did not carry the image") }
+        do { _ = try imageStore.file("../../data.json"); throw biweeklyError("Traversal was not rejected") }
+        catch { guard error.localizedDescription.contains("名称无效") else { throw error } }
+        guard try GitBackup.repository("git@github.com:example/repo.git").path.hasSuffix("github.com/example/repo") else { throw biweeklyError("Canonical git path is wrong") }
+        do { _ = try GitBackup.repository("ext::malicious"); throw biweeklyError("Unsafe remote was not rejected") }
+        catch { guard error.localizedDescription.contains("仓库地址") else { throw error } }
+    }
+
 }

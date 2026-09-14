@@ -227,3 +227,11 @@ dialog .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:2
   .detail{position:fixed;right:0;top:0;bottom:0;box-shadow:-20px 0 60px #41314c18;width:340px;z-index:5}
 
 }
+
+#note-rendered img{display:block;width:auto;max-width:100%;height:auto;margin:12px 0;border:1px solid #e7e0ef;border-radius:7px;cursor:zoom-in}
+dialog.image-viewer{width:min(94vw,1100px);max-height:94vh;padding:20px}
+.full-note-image{display:block;margin:auto;max-width:100%;max-height:calc(88vh - 120px);object-fit:contain}
+.git-status{font-size:10px;color:#867899;padding:5px 8px;margin-bottom:4px}
+.git-interval{margin-left:18px}.git-interval input{width:57px;border:1px solid #e5dced;border-radius:4px;padding:4px;margin:0 4px}
+.git-remote{display:block;width:100%;margin-top:10px;padding:9px;border:1px solid #e5dced;border-radius:5px;font-size:12px}
+.git-status-text{color:#87759b;margin-top:4px}

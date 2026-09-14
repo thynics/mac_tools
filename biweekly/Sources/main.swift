@@ -85,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "双周 · Biweekly", .applicationVersion: "1.0.0", .credits: NSAttributedString(string: "每两周，专注正在发生的事。\n本地任务 · Markdown · 双周归档")])
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "双周 · Biweekly", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0", .credits: NSAttributedString(string: "每两周，专注正在发生的事。\n本地任务 · Markdown · 双周归档")])
     }
     func call(_ method: String, _ args: [Any] = []) {
         guard let json = try? JSONSerialization.data(withJSONObject: args, options: [.fragmentsAllowed]), let text = String(data: json, encoding: .utf8) else { return }

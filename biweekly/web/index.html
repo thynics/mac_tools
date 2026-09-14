@@ -17,15 +17,15 @@
 </aside>
 <main>
   <header class="topbar"><div class="breadcrumb">我的工作台 <span>/</span> <b id="breadcrumb-period">当前双周</b></div><div class="top-actions"><button id="import-btn" class="quiet">↓ 导入 Markdown</button><button id="export-btn" class="quiet" title="导出当前双周为 Markdown">↑ 导出</button></div></header>
-  <section class="period-heading"><div class="eyebrow" id="period-eyebrow">YOUR NEXT TWO WEEKS</div><div class="title-line"><h1 id="period-title"></h1><span id="period-tag" class="period-tag">进行中</span><button id="archive-btn" class="quiet">归档并开启下一双周 ↗</button></div><div class="period-meta"><span id="date-range"></span><span class="meta-separator">·</span><span id="day-progress"></span><button id="cycle-notes-btn" class="text-button">双周笔记 ↗</button></div>
+  <section class="period-heading"><div class="title-line"><h1 id="period-title"></h1><span id="period-tag" class="period-tag">进行中</span><button id="archive-btn" class="quiet">归档并开启下一双周 ↗</button></div><div class="period-meta"><span id="date-range"></span><span class="meta-separator">·</span><span id="day-progress"></span><span class="meta-separator">·</span><span id="stats" class="stats"></span><button id="cycle-notes-btn" class="text-button">双周笔记 ↗</button></div>
   <div class="progress-line"><span id="progress-fill"></span></div>
-  <div id="stats" class="stats"></div></section>
+  </section>
   <section class="task-section"><div class="task-toolbar"><div class="tabs" role="tablist" aria-label="任务状态"><button data-filter="all" role="tab" class="active">全部 <span></span></button><button data-filter="doing" role="tab">Doing <span></span></button><button data-filter="todo" role="tab">Todo <span></span></button><button data-filter="done" role="tab">Done <span></span></button></div><label class="search-box"><span>⌕</span><input id="search" type="search" placeholder="搜索任务…" aria-label="搜索任务"><kbd>⌘ F</kbd></label></div>
   <div id="archive-notice" hidden>这个双周已归档，保留当时的任务与笔记。你仍可以浏览和导出。</div>
   <div class="list-heading"><span>任务 / TASK</span><div class="outline-actions"><button id="expand-all">展开全部</button><span>·</span><button id="collapse-all">收起全部</button></div><span>状态</span></div>
   <div id="task-list" role="tree" aria-label="任务列表"></div>
   <form id="quick-add" class="quick-add"><span>＋</span><input id="new-task" placeholder="添加任务，按 Enter 保存…" autocomplete="off" aria-label="新任务标题"><kbd>↵</kbd></form>
-  <div class="list-footer"><span>点击任务查看笔记 · 点击状态切换</span><span id="visible-count"></span></div>
+  <div class="list-footer"><span>拖动 ⋮⋮ 排序 · 点击任务查看笔记</span><span id="visible-count"></span></div>
   </section>
 </main>
 <aside id="detail" class="detail" hidden></aside>

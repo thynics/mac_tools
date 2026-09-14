@@ -9,6 +9,25 @@
   const task = (title, status = 'todo', children = [], notes = '') => ({id:uid(), title, status, children, notes, collapsed:false});
   const walk = (tasks, fn, parent = null) => tasks.forEach(t => { fn(t,parent); walk(t.children,fn,t); });
   const find = (tasks,id) => { let found; walk(tasks,t=>{if(t.id===id) found=t;}); return found; };
+  // Move the original node as a unit so notes, IDs and all descendants stay intact.
+  function taskPosition(tasks, id, parent = null) {
+    for (let index = 0; index < tasks.length; index++) {
+      if (tasks[index].id === id) return {task:tasks[index], siblings:tasks, index, parent};
+      const found = taskPosition(tasks[index].children, id, tasks[index]);
+      if (found) return found;
+    }
+    return null;
+  }
+  function reorderTask(tasks, sourceId, targetId, placement = 'before') {
+    const source = taskPosition(tasks, sourceId), target = taskPosition(tasks, targetId);
+    if (!source || !target || sourceId === targetId || source.siblings !== target.siblings || !['before','after'].includes(placement)) return false;
+    let destination = target.index + (placement === 'after' ? 1 : 0);
+    if (source.index < destination) destination--;
+    if (source.index === destination) return false;
+    source.siblings.splice(source.index, 1);
+    source.siblings.splice(destination, 0, source.task);
+    return true;
+  }
   const counts = tasks => { const c={todo:0,doing:0,done:0,total:0}; walk(tasks,t=>{c[t.status]++;c.total++;}); return c; };
   const carry = tasks => tasks.flatMap(t => {
     const children=carry(t.children);
@@ -60,6 +79,6 @@
     if(s.cycles.some(c=>c.archived&&c.start>=active.start))throw Error('归档日期必须早于当前双周。');
     return s;
   }
-  const api={uid,key,day,addDays,periodStart,task,walk,find,counts,carry,cycle,rollover,nextCycle,initial,validate};
+  const api={uid,key,day,addDays,periodStart,task,walk,find,taskPosition,reorderTask,counts,carry,cycle,rollover,nextCycle,initial,validate};
   if(typeof module!=='undefined')module.exports=api; else root.Biweekly=api;
 })(globalThis);

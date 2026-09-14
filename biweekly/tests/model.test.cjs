@@ -45,3 +45,14 @@ test('backup validation rejects corruption, duplicate IDs, invalid dates and dee
  const xss=structuredClone(s);xss.cycles[0].tasks[0].id='" onclick="evil';assert.throws(()=>B.validate(xss));
  let root=B.task('root'),cursor=root;for(let i=0;i<35;i++){cursor.children=[B.task('deep')];cursor=cursor.children[0];}assert.throws(()=>B.validate({...s,cycles:[B.cycle('2026-09-14',[root])]}));
 });
+test('reordering moves a complete subtree before or after siblings without changing its data',()=>{
+ const child=B.task('nested','doing',[],'important notes');const first=B.task('first','todo',[child]);const second=B.task('second');const third=B.task('third');const tasks=[first,second,third];
+ assert.equal(B.reorderTask(tasks,first.id,second.id,'after'),true);assert.deepEqual(tasks,[second,first,third]);assert.strictEqual(tasks[1].children[0],child);
+ assert.equal(B.reorderTask(tasks,third.id,second.id,'before'),true);assert.deepEqual(tasks,[third,second,first]);assert.equal(child.notes,'important notes');
+ assert.equal(B.reorderTask(tasks,first.id,second.id,'after'),false);assert.equal(B.reorderTask(tasks,first.id,child.id,'before'),false);assert.equal(B.reorderTask(tasks,child.id,third.id,'after'),false);
+ assert.equal(B.reorderTask(tasks,first.id,first.id),false);assert.equal(B.reorderTask(tasks,'missing',first.id),false);
+});
+test('nested sibling reordering preserves parent, notes, status and collapsed state',()=>{
+ const a=B.task('A','done'),b=B.task('B','doing'),c=B.task('C');const parent=B.task('Parent','todo',[a,b,c],'project notes');parent.collapsed=true;
+ assert.equal(B.reorderTask([parent],c.id,a.id),true);assert.deepEqual(parent.children,[c,a,b]);assert.equal(parent.collapsed,true);assert.equal(parent.notes,'project notes');assert.equal(parent.children[2].status,'doing');
+});

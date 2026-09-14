@@ -25,11 +25,25 @@ extension AppDelegate {
                 if readback {
                     let found = try await webView.evaluateJavaScript("Array.from(document.querySelectorAll('.task-title')).some(x=>x.textContent==='Native persistence check')")
                     guard found as? Bool == true else { throw NSError(domain: "Test", code: 2, userInfo: [NSLocalizedDescriptionKey: "Task was not persisted across native launches"]) }
+                    let order = try await webView.evaluateJavaScript("current().tasks.at(-2).title === 'Native persistence check'")
+                    guard order as? Bool == true else { throw NSError(domain: "Test", code: 9, userInfo: [NSLocalizedDescriptionKey: "Reordered task did not retain its position after restart"]) }
                     let stored = try Data(contentsOf: storeURL)
                     guard String(data: stored, encoding: .utf8)!.contains("Native persistence check") else { throw NSError(domain: "Test", code: 3) }
                 } else {
                     let count = try await webView.evaluateJavaScript("document.querySelectorAll('.task-row.doing').length")
                     guard count as? Int == 3 else { throw NSError(domain: "Test", code: 4, userInfo: [NSLocalizedDescriptionKey: "Wrong Doing count: \(String(describing: count))"]) }
+                    let reordered = try await webView.evaluateJavaScript("""
+                    (()=>{
+                      const roots=[...document.querySelectorAll('.task-row.root')],source=roots[1],target=roots[0];
+                      const transfer=new DataTransfer(),box=target.getBoundingClientRect();
+                      source.querySelector('[data-drag]').dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:box.left+8,clientY:box.top+8}));
+                      target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:box.left+80,clientY:box.top+2}));
+                      target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:box.left+80,clientY:box.top+2}));
+                      const passed=document.querySelector('.task-row.root').dataset.id===source.dataset.id;
+                      window.BiweeklyNative.command('undo');return passed;
+                    })()
+                    """)
+                    guard reordered as? Bool == true else { throw NSError(domain: "Test", code: 8, userInfo: [NSLocalizedDescriptionKey: "WebKit drag handlers failed to reorder the task group"]) }
                     _ = try await webView.evaluateJavaScript("document.querySelector('.task-row.doing .task-title').click(); true")
                     let screenshot = try await webView.takeSnapshot(configuration: nil)
                     let png = NSBitmapImageRep(data: screenshot.tiffRepresentation!)!.representation(using: .png, properties: [:])!
@@ -46,7 +60,7 @@ extension AppDelegate {
                     _ = try await webView.evaluateJavaScript("document.querySelector('#focus-doing').click(); true")
                     let doingRows = try await webView.evaluateJavaScript("document.querySelectorAll('.task-row').length")
                     guard doingRows as? Int == 6 else { throw NSError(domain: "Test", code: 5) }
-                    _ = try await webView.evaluateJavaScript("window.BiweeklyNative.command('all'); document.querySelector('#new-task').value='Native persistence check'; document.querySelector('#quick-add').requestSubmit(); true")
+                    _ = try await webView.evaluateJavaScript("window.BiweeklyNative.command('all'); document.querySelector('#new-task').value='Native persistence check'; document.querySelector('#quick-add').requestSubmit(); moveStep(current().tasks.at(-1).id,-1); true")
                 }
                 let report = "PASS: native WebKit \(readback ? "restart and disk persistence" : "rendering, Doing focus, restore safety copy, native save and quit flush")\n"
                 try report.write(to: directory.appendingPathComponent(readback ? "readback.txt" : "native.txt"), atomically: true, encoding: .utf8)

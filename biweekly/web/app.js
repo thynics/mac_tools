@@ -17,6 +17,99 @@ function persist(){if(locked)return;$('#save-label').textContent='正在保存�
 function changed(render=true){persist();if(render)renderAll();}
 function undoChange(){if(!history.length){toast('没有可撤销的更改');return;}state=JSON.parse(history.pop());if(!state.cycles.some(c=>c.id===cycleId))cycleId=active().id;if(selectedId!=='cycle'&&!B.find(current().tasks,selectedId))selectedId=null;changed();toast('已撤销');}
 function mutate(fn){if(locked||current().archived)return;snapshot();fn();changed();}
+function reorder(sourceId,targetId,placement){
+  if(locked||current().archived)return false;
+  const before=JSON.stringify(state);
+  if(!B.reorderTask(current().tasks,sourceId,targetId,placement))return false;
+  history.push(before);if(history.length>40)history.shift();
+  changed();return true;
+}
+function moveStep(id,direction){
+  const position=B.taskPosition(current().tasks,id);
+  const target=position?.siblings[position.index+direction];
+  if(target&&reorder(id,target.id,direction<0?'before':'after')){
+    const handle=$(`[data-drag="${id}"]`);
+    handle?.focus({preventScroll:true});handle?.scrollIntoView({block:'nearest'});
+  }
+}
+let dragState=null,dragFrame=0;
+function clearDropIndicator(){
+  $$('.drop-before,.drop-after').forEach(row=>row.classList.remove('drop-before','drop-after'));
+}
+function finishDrag(){
+  cancelAnimationFrame(dragFrame);dragFrame=0;dragState=null;
+  document.body.classList.remove('reordering');
+  $$('.dragging').forEach(row=>row.classList.remove('dragging'));clearDropIndicator();
+}
+function updateDrop(row,y){
+  if(!dragState)return;
+  clearDropIndicator();dragState.target=null;
+  const source=dragState.positions.get(dragState.id);
+  let target=dragState.positions.get(row.dataset.id);
+  // Hovering a project's descendants anchors the move to that whole project.
+  while(target&&target.parent!==source.parent){
+    target=target.parent?dragState.positions.get(target.parent):null;
+  }
+  if(!target||target.id===source.id)return;
+  const anchor=$(`.task-row[data-id="${target.id}"]`);
+  if(!anchor)return;
+  const box=anchor.getBoundingClientRect(),placement=y<box.top+box.height/2?'before':'after';
+  let indicator=anchor;
+  if(placement==='after'){
+    let next=anchor.nextElementSibling;
+    while(next?.classList.contains('task-row')&&Number(next.getAttribute('aria-level'))>Number(anchor.getAttribute('aria-level'))){indicator=next;next=next.nextElementSibling;}
+  }
+  indicator.classList.add('drop-'+placement);
+  dragState.target={id:target.id,placement};
+}
+function scrollWhileDragging(){
+  if(!dragState)return;
+  const pane=$('main'),bounds=pane.getBoundingClientRect(),{x,y}=dragState;
+  if(x>=bounds.left&&x<=bounds.right&&y>=bounds.top&&y<=bounds.bottom){
+    const distance=y<bounds.top+48?y-(bounds.top+48):y>bounds.bottom-48?y-(bounds.bottom-48):0;
+    if(distance){
+      pane.scrollTop+=Math.sign(distance)*Math.min(14,Math.abs(distance)/3);
+      const row=document.elementFromPoint(x,y)?.closest('.task-row');
+      if(row)updateDrop(row,y);
+    }
+  }
+  dragFrame=requestAnimationFrame(scrollWhileDragging);
+}
+function bindReordering(){
+  $$('[data-drag]').forEach(handle=>{
+    handle.ondragstart=e=>{
+      if(locked||current().archived){e.preventDefault();return;}
+      const positions=new Map();B.walk(current().tasks,(t,p)=>positions.set(t.id,{id:t.id,parent:p?.id||null}));
+      dragState={id:handle.dataset.drag,positions,target:null,x:e.clientX,y:e.clientY};
+      e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('application/x-biweekly-task',dragState.id);
+      const row=handle.closest('.task-row');
+      e.dataTransfer.setDragImage(row,Math.max(0,e.clientX-row.getBoundingClientRect().left),row.offsetHeight/2);
+      row.classList.add('dragging');document.body.classList.add('reordering');scrollWhileDragging();
+    };
+    handle.ondragend=finishDrag;
+    handle.onkeydown=e=>{
+      if(e.altKey&&['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();moveStep(handle.dataset.drag,e.key==='ArrowUp'?-1:1);}
+    };
+  });
+}
+document.addEventListener('dragover',e=>{
+  if(!dragState)return;
+  e.preventDefault();dragState.x=e.clientX;dragState.y=e.clientY;
+  const row=e.target.closest?.('.task-row');
+  if(row)updateDrop(row,e.clientY);else{clearDropIndicator();dragState.target=null;}
+  e.dataTransfer.dropEffect=dragState.target?'move':'none';
+});
+document.addEventListener('drop',e=>{
+  if(!dragState)return;
+  e.preventDefault();
+  const row=e.target.closest?.('.task-row');if(row)updateDrop(row,e.clientY);else dragState.target=null;
+  const {id,target}=dragState;finishDrag();
+  if(target&&reorder(id,target.id,target.placement)){
+    $(`[data-drag="${id}"]`)?.focus({preventScroll:true});toast('已调整任务顺序',true);
+  }
+});
+document.addEventListener('dragend',finishDrag);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&dragState)finishDrag();});
 // Checkbox inputs are the only form elements rendered in Markdown. Always keep them inert.
 function noteHTML(md){return DOMPurify.sanitize(marked.parse(md||'',{breaks:true,gfm:true}),{USE_PROFILES:{html:true},FORBID_TAGS:['style','form','button','textarea','select','iframe','object','embed'],FORBID_ATTR:['style','id','name']});}
 function renderSidebar(){
@@ -32,9 +125,8 @@ function renderHeader(){
   $('#date-range').textContent=`${c.start.replaceAll('-','.')} — ${B.addDays(c.start,13).replaceAll('-','.')}`;
   const elapsed=Math.floor((B.day(B.key())-B.day(c.start))/86400000)+1;
   $('#day-progress').textContent=c.archived?'双周记录已保存':elapsed<1?'将在 '+fmt(c.start)+' 开始':`第 ${Math.min(14,elapsed)} 天 / 共 14 天`;
-  $('#period-eyebrow').textContent=c.archived?'A LOOK BACK, A STEP FORWARD':'YOUR NEXT TWO WEEKS';
   $('#progress-fill').style.width=pct+'%';
-  $('#stats').innerHTML=`<div class="stat"><strong>${n.total}</strong><label>全部任务</label></div><div class="stat doing"><strong>${n.doing}</strong><label>Doing</label></div><div class="stat done"><strong>${n.done}</strong><label>Done</label></div><div class="stat-completion"><strong>${pct}%</strong> 已完成</div>`;
+  $('#stats').innerHTML=`<span class="stat done"><strong>${n.done}</strong> / ${n.total} 已完成</span>`;
   $$('[data-filter]').forEach(b=>{b.classList.toggle('active',b.dataset.filter===filter);b.setAttribute('aria-selected',String(b.dataset.filter===filter));b.querySelector('span').textContent=b.dataset.filter==='all'?n.total:n[b.dataset.filter];});
   $('#archive-btn').hidden=c.archived;$('#archive-notice').hidden=!c.archived;$('#quick-add').hidden=c.archived||locked;
 }
@@ -45,13 +137,15 @@ function renderTasks(){
   function rows(tasks,depth=0){return tasks.map(t=>{
     if(filtered&&!contains(t))return '';
     shown++;if(matches(t))matched++;
-    const open=filtered||!t.collapsed, childStats=B.counts(t.children);
+    const open=filtered||!t.collapsed, childStats=B.counts(t.children), siblingIndex=tasks.indexOf(t);
     return `<div class="task-row ${t.status} ${depth===0?'root':''} ${t.id===selectedId?'selected':''} ${filtered&&!matches(t)?'context':''}" style="--depth:${Math.min(depth,8)}" data-id="${t.id}" role="treeitem" aria-level="${depth+1}" ${t.children.length?`aria-expanded="${open}"`:''}>
+    ${!c.archived&&!locked?`<button class="drag-handle" draggable="true" data-drag="${t.id}" aria-label="排序：${esc(t.title)}" title="拖动调整同级顺序；⌥↑ / ⌥↓ 上下移动">⠿</button>`:'<span class="drag-placeholder"></span>'}
     <button class="collapse ${t.children.length?'':'spacer'}" data-collapse="${t.id}" aria-label="${open?'收起':'展开'}子任务">${open?'▾':'▸'}</button>
     <button class="task-check" data-check="${t.id}" aria-label="${t.status==='done'?'恢复为待办':'标为完成'}：${esc(t.title)}" ${c.archived?'disabled':''}></button>
     <button class="task-title" data-select="${t.id}" title="${esc(t.title)}">${esc(t.title)}</button>
     ${t.notes?'<span class="note-icon" title="有 Markdown 笔记">▤</span>':''}
     ${t.children.length?`<span class="child-count">${childStats.done}/${childStats.total}</span>`:''}
+    ${!c.archived&&!locked?`<span class="row-order"><button data-move="${t.id}" data-step="-1" title="上移" aria-label="上移：${esc(t.title)}" ${siblingIndex===0?'disabled':''}>↑</button><button data-move="${t.id}" data-step="1" title="下移" aria-label="下移：${esc(t.title)}" ${siblingIndex===tasks.length-1?'disabled':''}>↓</button></span>`:''}
     ${!c.archived?`<button class="row-add" data-child="${t.id}" title="添加子任务" aria-label="为 ${esc(t.title)} 添加子任务">＋</button>`:''}
     <button class="status-pill ${t.status}" data-status="${t.id}" title="点击切换 Todo → Doing → Done" ${c.archived?'disabled':''}><span class="status-dot ${t.status}"></span>${{todo:'Todo',doing:'Doing',done:'Done'}[t.status]}</button></div>${open?rows(t.children,depth+1):''}`;
   }).join('');}
@@ -64,21 +158,26 @@ function renderTasks(){
   $$('[data-check]').forEach(el=>el.onclick=()=>mutate(()=>{const t=B.find(c.tasks,el.dataset.check);t.status=t.status==='done'?'todo':'done';}));
   $$('[data-status]').forEach(el=>el.onclick=()=>mutate(()=>{const t=B.find(c.tasks,el.dataset.status);t.status={todo:'doing',doing:'done',done:'todo'}[t.status];}));
   $$('[data-child]').forEach(el=>el.onclick=()=>addChild(el.dataset.child));
+  $$('[data-move]').forEach(el=>el.onclick=()=>moveStep(el.dataset.move,Number(el.dataset.step)));
+  bindReordering();
 }
+function fitDetailTitle(){const title=$('#detail-title');if(title){title.style.height='auto';title.style.height=title.scrollHeight+'px';}}
+window.addEventListener('resize',fitDetailTitle);
 function renderDetail(){
   const target=selected();$('#detail').hidden=!target;if(!target)return;
   const isCycle=selectedId==='cycle', readOnly=current().archived;let parent=null;
   B.walk(current().tasks,(t,p)=>{if(t.id===selectedId)parent=p;});
   $('#detail').innerHTML=`<div class="detail-top"><span>${isCycle?'BIWEEKLY NOTES':'TASK DETAILS'}</span><button id="close-detail" aria-label="关闭详情">×</button></div><div class="detail-path">${esc(isCycle?'双周记录':parent?.title||fmt(current().start)+' 双周')} ${readOnly?'· 已归档':''}</div>
-    ${isCycle?'<h2 class="detail-title">双周笔记</h2>':`<textarea id="detail-title" class="detail-title title-input" rows="2" aria-label="任务标题" ${readOnly?'readonly':''}>${esc(target.title)}</textarea>`}
+    ${isCycle?'<h2 class="detail-title">双周笔记</h2>':`<textarea id="detail-title" class="detail-title title-input" rows="1" aria-label="任务标题" ${readOnly?'readonly':''}>${esc(target.title)}</textarea>`}
     ${!isCycle?`<div class="detail-properties"><span>状态</span><select id="detail-status" class="status-select" aria-label="任务状态" ${readOnly?'disabled':''}>${['todo','doing','done'].map(s=>`<option value="${s}" ${s===target.status?'selected':''}>${{todo:'○ Todo',doing:'◉ Doing',done:'✓ Done'}[s]}</option>`).join('')}</select></div>`:''}
     <div class="note-toolbar"><span>笔记 / MARKDOWN</span><div class="segmented"><button id="note-preview" class="${!editing?'active':''}">预览</button>${!readOnly?`<button id="note-edit" class="${editing?'active':''}">编辑</button>`:''}</div></div>
     ${editing&&!readOnly?`<textarea id="note-editor" class="note-editor" aria-label="Markdown 笔记" placeholder="粘贴 Markdown，或直接写下想法…\n\n## 标题\n- [ ] 待办\n\n支持代码块、表格与链接">${esc(target.notes)}</textarea>`:`<div class="markdown" id="note-rendered">${target.notes?noteHTML(target.notes):'<div class="note-empty">为任务留一些上下文。<br>点击「编辑」，粘贴或输入 Markdown。</div>'}</div>`}
     ${!readOnly?`<div class="detail-actions"><button id="insert-md" class="quiet">↓ 插入 .md</button>${!isCycle?'<button id="detail-add-child" class="quiet">＋ 子任务</button><button id="task-more" class="quiet">更多 ···</button>':''}</div>`:''}
     <p class="detail-tip">${readOnly?'已保存此双周的任务与笔记。':'笔记自动保存 · 支持标题、列表、表格、代码块'}<br>${!isCycle?'每个任务独立记录状态，父任务不会自动完成。':''}</p>`;
   $('#close-detail').onclick=()=>{selectedId=null;renderDetail();renderTasks();};
+  fitDetailTitle();
   $('#detail-title')?.addEventListener('focus',snapshot);
-  $('#detail-title')?.addEventListener('input',e=>{target.title=e.target.value;persist();renderTasks();});
+  $('#detail-title')?.addEventListener('input',e=>{target.title=e.target.value;fitDetailTitle();persist();renderTasks();});
   $('#detail-title')?.addEventListener('blur',e=>{if(!target.title.trim()){target.title='未命名任务';e.target.value=target.title;changed(false);renderTasks();}});
   $('#detail-status')?.addEventListener('change',e=>mutate(()=>target.status=e.target.value));
   $('#note-edit')?.addEventListener('click',()=>{editing=true;renderDetail();$('#note-editor').focus();});
@@ -101,8 +200,8 @@ function addChild(id){
 function taskMore(id){
   const t=B.find(current().tasks,id);let parent=null;B.walk(current().tasks,(x,p)=>{if(x.id===id)parent=p;});const siblings=parent?parent.children:current().tasks, index=siblings.findIndex(x=>x.id===id);
   showModal(`<h2>管理任务</h2><p>${esc(t.title)}${t.children.length?' · 包含 '+B.counts(t.children).total+' 个子任务':''}</p><div class="backup-actions"><button id="move-up" class="secondary" ${index===0?'disabled':''}>↑ 上移</button><button id="move-down" class="secondary" ${index===siblings.length-1?'disabled':''}>↓ 下移</button>${parent?'<button id="promote" class="secondary">提升一级</button>':''}</div><div class="settings-group"><button id="delete-task" class="secondary danger">删除任务${t.children.length?'及全部子任务':''}</button><p>删除后可撤销。子任务会随父任务一起删除。</p></div><div class="modal-actions"><button class="secondary" data-dismiss>关闭</button></div>`);
-  $('#move-up').onclick=()=>{mutate(()=>[siblings[index-1],siblings[index]]=[siblings[index],siblings[index-1]]);closeModal();};
-  $('#move-down').onclick=()=>{mutate(()=>[siblings[index],siblings[index+1]]=[siblings[index+1],siblings[index]]);closeModal();};
+  $('#move-up').onclick=()=>{moveStep(id,-1);closeModal();};
+  $('#move-down').onclick=()=>{moveStep(id,1);closeModal();};
   $('#promote')?.addEventListener('click',()=>{mutate(()=>{let grand=null;B.walk(current().tasks,(x,p)=>{if(x.id===parent.id)grand=p;});const arr=grand?grand.children:current().tasks;siblings.splice(index,1);arr.splice(arr.indexOf(parent)+1,0,t);});closeModal();});
   $('#delete-task').onclick=()=>{mutate(()=>{siblings.splice(index,1);selectedId=null;});closeModal();toast('已删除任务'+(t.children.length?'及其子任务':''),true);};
 }

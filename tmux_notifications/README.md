@@ -29,8 +29,9 @@ Codex 应在当前任务结束后退出 CLI，再运行 `codex resume` 选择原
 ## 验证记录
 
 2026-09-15：haifa 上 tmux 3.4、Codex 0.154.0、Claude 2.1.271，
-Mac 上 iTerm2 3.6.11。已从远端 workspace 面板发送 OSC 9 测试，
-Mac 上是否显示横幅待确认。实际 CLI 完成事件需在配置重载后触发。
+Mac 上 iTerm2 3.6.11。用户已确认从远端 workspace 面板发送的
+「iTerm 测试：远端回复通知 12345」正常显示，远端到 Mac 的通知通路验证通过。
+实际 CLI 完成事件需在配置重载后触发。
 已验证配置保留其他设置、重复安装不重复添加 hook，以及 Claude hook
 从真实 tmux 面板读取窗口名称并生成经过控制字符过滤的 OSC 9。
 

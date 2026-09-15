@@ -89,6 +89,10 @@ final class GitBackup {
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/git"); process.arguments = args; process.currentDirectoryURL = directory
         process.standardOutput = handle; process.standardError = handle; process.standardInput = FileHandle.nullDevice
         var env = ProcessInfo.processInfo.environment
+        if fm.isExecutableFile(atPath: "/Library/Developer/CommandLineTools/usr/bin/git") {
+            process.executableURL = URL(fileURLWithPath: "/Library/Developer/CommandLineTools/usr/bin/git")
+            env["DEVELOPER_DIR"] = "/Library/Developer/CommandLineTools"
+        }
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["GIT_SSH_COMMAND"] = "/usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
         process.environment = env
@@ -131,8 +135,9 @@ final class GitBackup {
             let target = destination.appendingPathComponent("images").appendingPathComponent(name)
             if !fm.fileExists(atPath: target.path) { try images.data(name).write(to: target, options: .atomic) }
         }
+        try AttachmentStore(root: root).copyReferencedFiles(object, to: destination)
         try (text + "\n").write(to: destination.appendingPathComponent("data.json"), atomically: true, encoding: .utf8)
-        let readme = "# Biweekly backup\n\nThis directory contains this device's tasks, fortnight archives and Markdown notes. Images live in `images/`.\n\nTo restore in Biweekly, use Preferences → Restore backup and select `data.json`, keeping the sibling `images` folder alongside it. Git history preserves earlier snapshots.\n"
+        let readme = "# Biweekly backup\n\nThis directory contains this device's tasks, fortnight archives and Markdown notes. Images live in `images/`; attached files are copied into `attachments/`.\n\nTo restore in Biweekly, use Preferences → Restore backup and select `data.json`, keeping the sibling `images` and `attachments` folders alongside it. Git history preserves earlier snapshots.\n"
         try readme.write(to: destination.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
         _ = try git(["add", "--", relative], at: repo)
         let staged = try git(["diff", "--cached", "--quiet", "--", relative], at: repo, allowFailure: true).code

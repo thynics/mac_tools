@@ -29,11 +29,21 @@
   function exportMarkdown(c){
     let out=`# ${c.start} 双周\n\n`;
     if(c.notes)out+=c.notes+'\n\n';
+    const uriPart=s=>encodeURIComponent(s).replace(/[!'()*]/g,ch=>'%'+ch.charCodeAt(0).toString(16).toUpperCase());
+    function fileLinks(node,indent=''){
+      for(const file of node.attachments||[]){
+        const path=file.path.split('/').slice(1).map(uriPart).join('/');
+        const label=file.name.replace(/[\\\[\]]/g,'\\$&');
+        out+=`${indent}[${label}](biweekly-file://local/${path})\n\n`;
+      }
+    }
+    fileLinks(c);
     function lines(tasks,depth=0){
       for(const t of tasks){
         const indent='  '.repeat(depth);
         out+=`${indent}- [${t.status==='done'?'x':' '}] ${t.status==='doing'?'[doing] ':''}${t.title.replace(/\n/g,' ')}\n`;
         if(t.notes)out+='\n'+t.notes.split('\n').map(l=>indent+'  '+l).join('\n')+'\n\n';
+        if(t.attachments?.length){out+='\n';fileLinks(t,indent+'  ');}
         lines(t.children,depth+1);
       }
     }

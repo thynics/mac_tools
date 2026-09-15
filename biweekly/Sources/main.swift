@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var webView: WKWebView!
     var dataDirectory: URL!
     var imageStore: ImageStore!
+    var attachmentStore: AttachmentStore!
+    private let attachmentQueue = DispatchQueue(label: "com.thynics.biweekly.attachments", qos: .userInitiated)
     var gitBackup: GitBackup!
     #if UI_TESTS
     var testPasteboard: NSPasteboard?
@@ -28,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         do { try fm.createDirectory(at: dataDirectory, withIntermediateDirectories: true) }
         catch { fatalAlert("无法创建数据目录：\(error.localizedDescription)"); return }
         imageStore = ImageStore(root: dataDirectory)
+        attachmentStore = AttachmentStore(root: dataDirectory)
         gitBackup = GitBackup(root: dataDirectory, images: imageStore)
         gitBackup.onStatus = { [weak self] info in self?.call("gitStatus", [info]) }
         let content = WKUserContentController()
@@ -122,10 +125,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
             if !attachments.isEmpty { object["imageAttachments"] = attachments }
         }
-        return String(data: try JSONSerialization.data(withJSONObject: object, options: .withoutEscapingSlashes), encoding: .utf8)!
+        let hydratedImages = String(data: try JSONSerialization.data(withJSONObject: object, options: .withoutEscapingSlashes), encoding: .utf8)!
+        return try attachmentStore.hydrateBackup(hydratedImages, beside: url)
+    }
+    func importAttachments(_ urls: [URL], request: String) {
+        guard !saveBlocked else { call("filesAttached", [request, [], "数据暂时无法写入。"]); return }
+        guard urls.count <= 20 else { call("filesAttached", [request, [], "一次最多附加 20 个文件。"]); return }
+        attachmentQueue.async { [self] in
+            var records: [[String: Any]] = [], errors: [String] = []
+            for url in urls {
+                do { records.append(try attachmentStore.store(url).object) }
+                catch { errors.append(url.lastPathComponent + "：" + error.localizedDescription) }
+            }
+            DispatchQueue.main.async { self.call("filesAttached", [request, records, errors.isEmpty ? NSNull() : errors.joined(separator: "；")]) }
+        }
+    }
+    func openAttachment(_ path: String, reveal: Bool) {
+        do {
+            let file = try attachmentStore.file(path)
+            guard fm.fileExists(atPath: file.path) else { throw biweeklyError("附件副本不存在，请恢复完整备份。") }
+            let documentTypes: Set<String> = ["pdf", "txt", "md", "csv", "tsv", "json", "yaml", "yml", "toml", "log", "png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp", "doc", "docx", "rtf", "pages", "xls", "xlsx", "numbers", "ppt", "pptx", "key", "html", "htm", "svg", "mp3", "wav", "m4a", "mp4", "mov"]
+            if reveal || !documentTypes.contains(file.pathExtension.lowercased()) { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+            else if !NSWorkspace.shared.open(file) { throw biweeklyError("无法打开附件，可以在 Finder 中查看。") }
+        } catch { call("error", [error.localizedDescription]) }
     }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "双周 · Biweekly", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.0", .credits: NSAttributedString(string: "每两周，专注正在发生的事。\n本地任务 · Markdown · 双周归档")])
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "双周 · Biweekly", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0", .credits: NSAttributedString(string: "每两周，专注正在发生的事。\n本地任务 · Markdown · 双周归档")])
     }
     func call(_ method: String, _ args: [Any] = []) {
         guard let json = try? JSONSerialization.data(withJSONObject: args, options: [.fragmentsAllowed]), let text = String(data: json, encoding: .utf8) else { return }
@@ -177,6 +202,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard let text = body["data"] as? String, let data = text.data(using: .utf8), data.count <= 50_000_000, validData(data) else { call("saved", [revision, "数据格式无效或超过 50 MB。"]); return }
             do { try backupBeforeWrite(); try data.write(to: storeURL, options: [.atomic]); call("saved", [revision, NSNull()]) }
             catch { call("saved", [revision, "保存失败：\(error.localizedDescription)"]) }
+        case "chooseAttachments":
+            guard let request = body["request"] as? String else { return }
+            let panel = NSOpenPanel(); panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = true
+            panel.message = "文件将复制到本地数据目录，与笔记一同备份。"
+            panel.beginSheetModal(for: window) { response in
+                if response == .OK { self.importAttachments(panel.urls, request: request) }
+                else { self.call("filesAttached", [request, [], NSNull()]) }
+            }
+        case "attachFileData":
+            guard let request = body["request"] as? String, let name = body["name"] as? String, let encoded = body["base64"] as? String else { return }
+            guard !saveBlocked, encoded.utf8.count <= 66_666_672 else { call("filesAttached", [request, [], "文件过大或数据暂时无法写入。"]); return }
+            attachmentQueue.async { [self] in
+                do {
+                    guard let bytes = Data(base64Encoded: encoded) else { throw biweeklyError("文件内容无效。") }
+                    let record = try attachmentStore.store(data: bytes, name: name)
+                    DispatchQueue.main.async { self.call("filesAttached", [request, [record.object], NSNull()]) }
+                } catch { DispatchQueue.main.async { self.call("filesAttached", [request, [], error.localizedDescription]) } }
+            }
+        case "openAttachment":
+            if let path = body["path"] as? String { openAttachment(path, reveal: false) }
+        case "revealAttachment":
+            if let path = body["path"] as? String { openAttachment(path, reveal: true) }
         case "pasteImage":
             guard let request = body["request"] as? String else { return }
             do {
@@ -197,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard let content = body["content"] as? String, let name = body["name"] as? String else { return }
             let panel = NSSavePanel(); panel.nameFieldStringValue = name; panel.canCreateDirectories = true
             panel.beginSheetModal(for: window) { response in
-                if response == .OK, let url = panel.url { do { let output = name.hasSuffix(".json") ? try self.imageStore.backup(content) : try self.imageStore.portableMarkdown(content); try output.write(to: url, atomically: true, encoding: .utf8); self.call("error", ["已导出 \(url.lastPathComponent)"]) } catch { self.call("error", [error.localizedDescription]) } }
+                if response == .OK, let url = panel.url { do { let output = name.hasSuffix(".json") ? try self.attachmentStore.backup(self.imageStore.backup(content)) : try self.attachmentStore.portableMarkdown(self.imageStore.portableMarkdown(content), at: url); try output.write(to: url, atomically: true, encoding: .utf8); self.call("error", ["已导出 \(url.lastPathComponent)"]) } catch { self.call("error", [error.localizedDescription]) } }
             }
         case "restoreBackup":
             let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.allowsMultipleSelection = false
@@ -207,8 +254,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "beforeRestore":
             do {
                 guard let text = body["data"] as? String else { throw biweeklyError("缺少待恢复的数据。") }
-                let prepared = try imageStore.prepareRestore(text)
+                let preparedFiles = try attachmentStore.prepareRestore(text)
+                let withoutFiles = String(data: try JSONSerialization.data(withJSONObject: preparedFiles.state, options: .withoutEscapingSlashes), encoding: .utf8)!
+                let prepared = try imageStore.prepareRestore(withoutFiles)
                 if fm.fileExists(atPath: storeURL.path) { try fm.copyItem(at: storeURL, to: dataDirectory.appendingPathComponent("before-restore-\(UUID().uuidString).json")) }
+                try attachmentStore.install(preparedFiles.files)
                 try imageStore.install(prepared.images)
                 saveBlocked = false
                 call("restorePrepared", [NSNull(), prepared.state])

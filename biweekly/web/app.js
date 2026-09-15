@@ -143,7 +143,7 @@ function renderTasks(){
     <button class="collapse ${t.children.length?'':'spacer'}" data-collapse="${t.id}" aria-label="${open?'收起':'展开'}子任务">${open?'▾':'▸'}</button>
     <button class="task-check" data-check="${t.id}" aria-label="${t.status==='done'?'恢复为待办':'标为完成'}：${esc(t.title)}" ${c.archived?'disabled':''}></button>
     <button class="task-title" data-select="${t.id}" title="${esc(t.title)}">${esc(t.title)}</button>
-    ${t.notes?'<span class="note-icon" title="有 Markdown 笔记">▤</span>':''}
+    ${t.notes||t.attachments?.length?'<span class="note-icon" title="有笔记或附件">▤</span>':''}
     ${t.children.length?`<span class="child-count">${childStats.done}/${childStats.total}</span>`:''}
     ${!c.archived&&!locked?`<span class="row-order"><button data-move="${t.id}" data-step="-1" title="上移" aria-label="上移：${esc(t.title)}" ${siblingIndex===0?'disabled':''}>↑</button><button data-move="${t.id}" data-step="1" title="下移" aria-label="下移：${esc(t.title)}" ${siblingIndex===tasks.length-1?'disabled':''}>↓</button></span>`:''}
     ${!c.archived?`<button class="row-add" data-child="${t.id}" title="添加子任务" aria-label="为 ${esc(t.title)} 添加子任务">＋</button>`:''}
@@ -173,7 +173,9 @@ function renderDetail(){
     <div class="note-toolbar"><span>笔记 / MARKDOWN</span><div class="segmented"><button id="note-preview" class="${!editing?'active':''}">预览</button>${!readOnly?`<button id="note-edit" class="${editing?'active':''}">编辑</button>`:''}</div></div>
     ${editing&&!readOnly?`<textarea id="note-editor" class="note-editor" aria-label="Markdown 笔记" placeholder="粘贴 Markdown，或直接写下想法…\n\n## 标题\n- [ ] 待办\n\n支持代码块、表格与链接">${esc(target.notes)}</textarea>`:`<div class="markdown" id="note-rendered">${target.notes?noteHTML(target.notes):'<div class="note-empty">为任务留一些上下文。<br>粘贴图片（⌘V），或点击「编辑」写 Markdown。</div>'}</div>`}
     ${!readOnly?`<div class="detail-actions"><button id="paste-image" class="quiet" title="复制截图或图片后按 ⌘V">▧ 粘贴图片</button><button id="insert-md" class="quiet">↓ 插入 .md</button>${!isCycle?'<button id="detail-add-child" class="quiet">＋ 子任务</button><button id="task-more" class="quiet">更多 ···</button>':''}</div>`:''}
+    <section id="attachment-section" class="attachment-section" aria-label="文件附件"></section>
     <p class="detail-tip">${readOnly?'已保存此双周的任务与笔记。':'⌘V 粘贴图片 · 点击图片可放大 · 自动保存'}<br>${!isCycle?'每个任务独立记录状态，父任务不会自动完成。':''}</p>`;
+  renderAttachmentSection();
   $('#close-detail').onclick=()=>{selectedId=null;renderDetail();renderTasks();};
   fitDetailTitle();
   $('#detail-title')?.addEventListener('focus',snapshot);
@@ -227,6 +229,7 @@ function settings(){
 }
 function checkRollover(){if(!state||locked||$('#modal').open)return;if(B.rollover(state)){history=[];cycleId=active().id;selectedId=null;changed();toast('新的双周开始了，上个双周已自动归档。');}}
 window.BiweeklyNative={
+ filesAttached:receiveFileAttachments,
  pasteImageCommand:requestImagePaste,imagePasted:receiveImagePaste,gitStatus:receiveGitStatus,
  bootstrap(data,info={}){if(nativeReady)return;nativeReady=true;diskPath=info.path||'';try{state=data?B.validate(data):B.initial();B.rollover(state);cycleId=active().id;renderAll();persist();if(info.warning)toast(info.warning);}catch(e){locked=true;$('#task-list').innerHTML=`<div class="empty"><strong>数据暂时无法读取</strong>${esc(e.message)}<br>请通过「偏好与备份」恢复 JSON 备份。</div>`;state=B.initial();cycleId=state.cycles[0].id;renderSidebar();$('#save-label').textContent='数据读取失败 · 已停止写入';}window.__ready=true;},
  saved(revision,error){if(error){$('#save-label').textContent='保存失败';toast(error);}else if(revision===saveRevision)$('#save-label').textContent='本地存储 · 已保存';},

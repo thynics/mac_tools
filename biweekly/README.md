@@ -9,7 +9,7 @@
 open "$HOME/Applications/Biweekly.app"
 ```
 
-构建需要 Apple Command Line Tools（`xcode-select --install`）。构建产物位于 `build/Biweekly.app`，本地临时签名；安装不会替换用户数据。
+构建需要 Apple Command Line Tools（`xcode-select --install`）。构建脚本和 Git 备份优先使用已安装的独立 Command Line Tools，不修改系统 `xcode-select`。构建产物位于 `build/Biweekly.app`，本地临时签名；安装不会替换用户数据。
 
 ## 使用
 
@@ -22,10 +22,11 @@ open "$HOME/Applications/Biweekly.app"
 - 点击任务打开详情，直接修改标题。**更多** 或右键任务可删除、上下移动；子任务可提升一级。删除父任务同时删除其子任务；⌘Z 或提示中的「撤销」恢复，最多保留本次运行的 40 步更改。
 - 详情笔记支持 Markdown 编辑与预览，包括标题、列表、引用、代码块、链接、表格及任务复选框的显示。笔记中的复选框是 Markdown 内容，修改源码来更新；任务状态用列表中的状态控件更新。
 - **图片笔记**：打开任务或双周笔记，复制截图/图片后按 **⌘V**，或点「粘贴图片」。编辑模式插入到光标处，预览模式附加到末尾；粘贴后直接预览，点击图片放大。图片作为去重后的本地 PNG 附件保存，最长边最多 4096 px，笔记只保存简短引用；编辑 Markdown 可以删除图片引用，⌘Z 可撤销插入。
+- **文件附件**：在任务或双周笔记的「附件」区点 **附加文件**，或将文件拖入右侧详情；默认复制到与元数据同目录的 `attachments/<内容哈希>/<原文件名>`。保留原文件名和原始字节，同名不同内容独立保存。附件显示大小，可打开、在 Finder 中定位、移除和撤销；归档只读，未完成任务的附件随任务延续。单文件最多 50 MB，一次最多 20 个文件，每条笔记最多 500 个附件；文件夹请先压缩。副本是附加时的文件快照，修改原文件不会自动更新副本，需要更新时重新附加。
 - **Git 备份**：偏好中设置 SSH/HTTPS 仓库并启用，默认每 5 分钟检查。App 运行期间定期备份，启动也会检查；无变化不创建提交，失败显示原因并自动重试。侧栏可查看状态并立即备份。
 - **导入 Markdown**（⌘I）接受粘贴或 UTF-8 `.md` 文件。列表转成层级任务，`[doing]` 表示进行中，`[x]` 或 `[done]` 表示完成。选中完成的任务优先识别为 Done。
 - 导入时也可选择「插入为双周笔记」，保留整份 Markdown 正文。任务详情的 **插入 .md** 将整份文件附加到该任务笔记。
-- 导出当前双周为 `.md`，或在偏好中导出/恢复全部数据的 JSON 备份。完整 JSON 备份内嵌所需图片，保留日期、任务层级、状态和笔记；Markdown 导出也会内嵌图片；Markdown 清单导入会将笔记内的列表也识别为任务，完整迁移请使用 JSON。
+- 导出当前双周为 `.md`，或在偏好中导出/恢复全部数据的 JSON 备份。完整 JSON 备份内嵌所需图片和文件副本，保留日期、任务层级、状态和笔记；Markdown 导出内嵌图片，并在 `.md` 旁生成 `<文件名>-attachments/` 文件夹和相对链接，请一起保留；Markdown 清单导入会将笔记内的列表也识别为任务，完整迁移请使用 JSON。
 
 ## 归档规则
 
@@ -38,6 +39,7 @@ App 启动、重新获得焦点以及运行时每分钟检查周期。到开始�
 `~/Library/Application Support/Biweekly/`
 
 - `data.json`：主数据，原子写入；编辑后约 200 ms 保存，失焦与退出时立即保存。
+- `attachments/`：默认复制的文件附件；任务/双周的可选 `attachments` 数组记录原文件名、相对路径、字节数和附加时间。移除只解除关联，保留历史文件供撤销、归档和旧版本恢复。
 - `images/`：按内容哈希命名的图片附件；保持历史附件以支持撤销、归档和旧备份恢复。
 - `git-backup.json`：本机 Git 仓库、周期、设备标识配置，不随任务数据上传或恢复。
 - `data.previous.json`：上一次有效写入。
@@ -45,17 +47,17 @@ App 启动、重新获得焦点以及运行时每分钟检查周期。到开始�
 - `before-restore-*.json`：恢复完整备份前保留的旧数据。
 - 主文件 JSON 损坏时尝试使用上一份备份，保留损坏原件。结构校验失败时暂停写入，可从偏好中恢复完整备份。
 
-Markdown 渲染由本地 bundled Marked + DOMPurify 完成；清除可执行 HTML，并限制 WebView 的导航和脚本来源。普通网页链接使用默认浏览器打开。为保持离线，正文不会自动请求外部图片；支持内嵌 data 图片。Markdown 导入与任务元数据上限 50 MB，带图片的 JSON 备份上限 200 MB。图片无需网络；不支持提醒推送。
+Markdown 渲染由本地 bundled Marked + DOMPurify 完成；清除可执行 HTML，并限制 WebView 的导航和脚本来源。普通网页链接使用默认浏览器打开。为保持离线，正文不会自动请求外部图片；支持内嵌 data 图片。Markdown 导入与任务元数据上限 50 MB，含图片和文件的 JSON 备份上限 200 MB。图片无需网络；不支持提醒推送。
 
 源代码中的初始任务为通用示例，用户数据不存入仓库。
 
 ## Git 版本备份
 
-规范克隆路径为 `~/host/namespace/repository`；已存在的仓库必须拥有同一 origin，App 不会覆盖冲突目录。每台设备写入 `devices/<device-id>/data.json` 和同目录 `images/`，避免互相覆盖任务文件。
+规范克隆路径为 `~/host/namespace/repository`；已存在的仓库必须拥有同一 origin，App 不会覆盖冲突目录。每台设备写入 `devices/<device-id>/data.json` 和同目录 `images/`、`attachments/`，避免互相覆盖任务文件。
 
 同步使用 fetch、fast-forward merge、仅提交设备备份目录，再按需 push；不会强推、清理用户改动或自动处理冲突。仓库有其他未提交改动、存在不属于备份的待推送提交或分支分叉时，显示错误并保留本机数据。SSH 使用现有系统配置，非交互认证；网络断开或认证失败时按周期重试。
 
-这是按设备保存的版本备份，不会自动把另一台设备的数据合并到当前任务列表。恢复时，在 App 偏好中选择 Git 目录里的 `devices/<device-id>/data.json`，同时保留旁边的 `images/` 目录；恢复前仍会先保留本机旧数据。App 关闭时不执行定时备份，重新打开后会检查。
+这是按设备保存的版本备份，不会自动把另一台设备的数据合并到当前任务列表。恢复时，在 App 偏好中选择 Git 目录里的 `devices/<device-id>/data.json`，同时保留旁边的 `images/`、`attachments/` 目录；恢复前仍会先保留本机旧数据。App 关闭时不执行定时备份，重新打开后会检查。
 
 ## 验证
 
@@ -63,6 +65,7 @@ Markdown 渲染由本地 bundled Marked + DOMPurify 完成；清除可执行 HTM
 node --test tests/model.test.cjs
 # Requires Playwright and a local Chrome installation; CHROME_PATH can override.
 node tests/ui.cjs
+node tests/attachments-ui.cjs
 # Native WebKit rendering, real disk writes and quit/relaunch; uses a separate temp store.
 ./scripts/test-native.sh
 ```

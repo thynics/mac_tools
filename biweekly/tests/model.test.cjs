@@ -56,3 +56,17 @@ test('nested sibling reordering preserves parent, notes, status and collapsed st
  const a=B.task('A','done'),b=B.task('B','doing'),c=B.task('C');const parent=B.task('Parent','todo',[a,b,c],'project notes');parent.collapsed=true;
  assert.equal(B.reorderTask([parent],c.id,a.id),true);assert.deepEqual(parent.children,[c,a,b]);assert.equal(parent.collapsed,true);assert.equal(parent.notes,'project notes');assert.equal(parent.children[2].status,'doing');
 });
+const attachment=()=>({name:'实验记录 [v1].txt',path:'attachments/'+ 'a'.repeat(64)+'/实验记录 [v1].txt',size:4,addedAt:'2026-09-15T01:00:00Z'});
+test('file metadata is optional for old data and rejects traversal, duplicate paths and oversized files',()=>{
+ const state=B.initial();B.validate(state);state.cycles[0].tasks[0].attachments=[attachment()];B.validate(state);
+ for(const patch of [{path:'attachments/../../secret'},{name:'../secret'},{size:50000001},{size:-1},{addedAt:'invalid'},{name:'different.txt'}])assert.throws(()=>B.validateAttachments([{...attachment(),...patch}]));
+ assert.throws(()=>B.validateAttachments([attachment(),attachment()]));
+});
+test('rollover preserves file references independently of the archived task',()=>{
+ const state=B.initial('2026-09-14');state.cycles[0].tasks[0].attachments=[attachment()];const original=state.cycles[0];B.rollover(state,'2026-09-28');
+ const copy=state.cycles[0].tasks[0];assert.deepEqual(copy.attachments,original.tasks[0].attachments);assert.notStrictEqual(copy.attachments,original.tasks[0].attachments);assert.notStrictEqual(copy.attachments[0],original.tasks[0].attachments[0]);copy.attachments.splice(0,1);assert.equal(original.tasks[0].attachments.length,1);
+});
+test('Markdown export includes file links for the fortnight and individual tasks',()=>{
+ const cycle=B.cycle('2026-09-14',[B.task('Project')]);cycle.attachments=[attachment()];cycle.tasks[0].attachments=[attachment()];const md=M.exportMarkdown(cycle);
+ assert.equal((md.match(/biweekly-file:\/\/local\//g)||[]).length,2);assert.match(md,/\\\[v1\\\]/);assert.match(md,/%E5%AE%9E/);assert.match(md,/%5Bv1%5D/);
+});

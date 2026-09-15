@@ -31,7 +31,7 @@
   const counts = tasks => { const c={todo:0,doing:0,done:0,total:0}; walk(tasks,t=>{c[t.status]++;c.total++;}); return c; };
   const carry = tasks => tasks.flatMap(t => {
     const children=carry(t.children);
-    return t.status==='done'&&!children.length ? [] : [{...t,id:uid(),status:t.status==='done'?'todo':t.status,children,collapsed:false}];
+    return t.status==='done'&&!children.length ? [] : [{...t,id:uid(),status:t.status==='done'?'todo':t.status,children,collapsed:false,...(t.attachments?{attachments:t.attachments.map(a=>({...a}))}:{})}];
   });
   function cycle(start,tasks=[]) { return {id:uid(),start,archived:false,tasks,notes:''}; }
   function rollover(state, today=key()) {
@@ -62,6 +62,17 @@
     ];
     return {version:1,settings:{carryUnfinished:true},cycles:[cycle(start,tasks)]};
   }
+  function validateAttachments(attachments) {
+    if(attachments===undefined)return;
+    if(!Array.isArray(attachments)||attachments.length>500)throw Error('每条笔记最多支持 500 个文件附件。');
+    const seen=new Set();
+    for(const a of attachments){
+      if(!a||typeof a.name!=='string'||!a.name||['.','..'].includes(a.name)||/[\\/\x00-\x1f\x7f]/.test(a.name)||new TextEncoder().encode(a.name).length>255||
+         typeof a.path!=='string'||!/^attachments\/[a-f0-9]{64}\/[^/\\\x00-\x1f\x7f]+$/.test(a.path)||a.path.split('/')[2]!==a.name||
+         !Number.isInteger(a.size)||a.size<0||a.size>50000000||typeof a.addedAt!=='string'||!Number.isFinite(Date.parse(a.addedAt))||seen.has(a.path))throw Error('文件附件元数据无效。');
+      seen.add(a.path);
+    }
+  }
   function validate(s) {
     if(!s||s.version!==1||!Array.isArray(s.cycles)||!s.cycles.length||typeof s.settings?.carryUnfinished!=='boolean') throw Error('备份格式不正确，或版本暂不支持。');
     let total=0; const ids=new Set(); const starts=new Set();
@@ -70,15 +81,15 @@
       if(!Array.isArray(arr)||depth>32)throw Error('任务层级无效（最多 32 层）。');
       arr.forEach(t=>{if(++total>20000)throw Error('任务数超过 20,000。'); id(t.id);
         if(typeof t.title!=='string'||typeof t.notes!=='string'||!['todo','doing','done'].includes(t.status)||typeof t.collapsed!=='boolean')throw Error('任务格式无效。');
-        tasks(t.children,depth+1);
+        validateAttachments(t.attachments);tasks(t.children,depth+1);
       });
     }
     if(s.cycles.filter(c=>!c.archived).length!==1)throw Error('必须保留一个当前双周。');
-    s.cycles.forEach(c=>{id(c.id);if(!/^\d{4}-\d{2}-\d{2}$/.test(c.start)||!Number.isFinite(day(c.start))||addDays(c.start,0)!==c.start||starts.has(c.start)||typeof c.archived!=='boolean'||typeof c.notes!=='string')throw Error('双周信息无效。');starts.add(c.start);tasks(c.tasks);});
+    s.cycles.forEach(c=>{id(c.id);if(!/^\d{4}-\d{2}-\d{2}$/.test(c.start)||!Number.isFinite(day(c.start))||addDays(c.start,0)!==c.start||starts.has(c.start)||typeof c.archived!=='boolean'||typeof c.notes!=='string')throw Error('双周信息无效。');starts.add(c.start);validateAttachments(c.attachments);tasks(c.tasks);});
     const active=s.cycles.find(c=>!c.archived);
     if(s.cycles.some(c=>c.archived&&c.start>=active.start))throw Error('归档日期必须早于当前双周。');
     return s;
   }
-  const api={uid,key,day,addDays,periodStart,task,walk,find,taskPosition,reorderTask,counts,carry,cycle,rollover,nextCycle,initial,validate};
+  const api={uid,key,day,addDays,periodStart,task,walk,find,taskPosition,reorderTask,counts,carry,cycle,rollover,nextCycle,initial,validateAttachments,validate};
   if(typeof module!=='undefined')module.exports=api; else root.Biweekly=api;
 })(globalThis);

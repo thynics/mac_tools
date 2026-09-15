@@ -235,3 +235,15 @@ dialog.image-viewer{width:min(94vw,1100px);max-height:94vh;padding:20px}
 .git-interval{margin-left:18px}.git-interval input{width:57px;border:1px solid #e5dced;border-radius:4px;padding:4px;margin:0 4px}
 .git-remote{display:block;width:100%;margin-top:10px;padding:9px;border:1px solid #e5dced;border-radius:5px;font-size:12px}
 .git-status-text{color:#87759b;margin-top:4px}
+
+.attachment-section{margin-top:18px;padding-top:12px;border-top:1px solid var(--line)}
+.attachment-heading{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#756686;margin-bottom:9px;gap:8px}
+.attachment-heading b{font-size:11px;font-weight:400;color:#a192af;margin-left:5px}
+.attachment-row{display:flex;gap:8px;align-items:center;border:1px solid #e9e2f0;border-radius:7px;background:#fff;margin:6px 0;padding:9px 8px;min-width:0}
+.attachment-type{flex:none;font-size:8px;font-weight:650;background:#eee8f7;color:#8c71ad;border-radius:4px;padding:6px 3px;width:32px;text-align:center}
+.attachment-name{flex:1;min-width:0;text-align:left;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:12px;padding:2px 0;color:#695379}
+.attachment-name small{display:block;font-size:10px;color:#a191ad;margin-top:3px}
+.attachment-reveal,.attachment-remove{flex:none;padding:3px;color:#9b86ad;font-size:15px}
+.attachment-empty{border:1px dashed #dcd2e7;border-radius:7px;padding:15px 8px;text-align:center;font-size:11px;color:#a18cae}
+.attachment-hint{font-size:10px;color:#ac9ab6;line-height:1.5;margin:8px 0 0}
+.file-drop-active{outline:2px solid #a591d4;outline-offset:-3px;background:#f5f0fd}

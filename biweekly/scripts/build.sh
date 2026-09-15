@@ -1,5 +1,9 @@
 #!/bin/bash
 set -euo pipefail
+# Prefer the independently installed Command Line Tools without changing xcode-select.
+if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Library/Developer/CommandLineTools ]; then
+  export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/build"
 APP="$BUILD_DIR/Biweekly.app"

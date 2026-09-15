@@ -34,6 +34,10 @@ extension AppDelegate {
                         try await Task.sleep(nanoseconds: 100_000_000)
                     }
                     guard pictureLoaded else { throw biweeklyError("Image was not restored after native restart") }
+                    let records = try await webView.evaluateJavaScript("JSON.stringify(selected().attachments)") as! String
+                    let files = try JSONDecoder().decode([FileAttachment].self, from: Data(records.utf8))
+                    guard files.count == 3 else { throw biweeklyError("Attachment metadata was not persisted across restart") }
+                    for file in files { guard try attachmentStore.data(file.path).count == file.size else { throw biweeklyError("Attachment copy is missing after restart") } }
                     let stored = try Data(contentsOf: storeURL)
                     guard String(data: stored, encoding: .utf8)!.contains("Native persistence check") else { throw NSError(domain: "Test", code: 3) }
                 } else {
@@ -53,6 +57,7 @@ extension AppDelegate {
                     guard reordered as? Bool == true else { throw NSError(domain: "Test", code: 8, userInfo: [NSLocalizedDescriptionKey: "WebKit drag handlers failed to reorder the task group"]) }
                     _ = try await webView.evaluateJavaScript("document.querySelector('.task-row.doing .task-title').click(); true")
                     try await verifyImageNotes()
+                    try await verifyFileAttachments()
                     let screenshot = try await webView.takeSnapshot(configuration: nil)
                     let png = NSBitmapImageRep(data: screenshot.tiffRepresentation!)!.representation(using: .png, properties: [:])!
                     try png.write(to: directory.appendingPathComponent("native-preview.png"))
@@ -117,6 +122,70 @@ extension AppDelegate {
         guard try GitBackup.repository("git@github.com:example/repo.git").path.hasSuffix("github.com/example/repo") else { throw biweeklyError("Canonical git path is wrong") }
         do { _ = try GitBackup.repository("ext::malicious"); throw biweeklyError("Unsafe remote was not rejected") }
         catch { guard error.localizedDescription.contains("仓库地址") else { throw error } }
+    }
+
+    @MainActor func verifyFileAttachments() async throws {
+        let sources = dataDirectory.appendingPathComponent("source-files")
+        try fm.createDirectory(at: sources.appendingPathComponent("a"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: sources.appendingPathComponent("b"), withIntermediateDirectories: true)
+        let filename = "实验记录 [v1] (final).txt"
+        let first = sources.appendingPathComponent("a").appendingPathComponent(filename)
+        let second = sources.appendingPathComponent("b").appendingPathComponent(filename)
+        let bytesA = Data("first independent snapshot\n".utf8), bytesB = Data("second independent snapshot\n".utf8)
+        try bytesA.write(to: first); try bytesB.write(to: second)
+        let request = try await webView.evaluateJavaScript("beginAttachmentRequest()") as! String
+        importAttachments([first, second], request: request)
+        var ready = false
+        for _ in 0..<60 {
+            if (try await webView.evaluateJavaScript("selected().attachments?.length===2 && pendingFileAttachments.size===0")) as? Bool == true { ready = true; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard ready else { throw biweeklyError("Native attach callback did not create the two attachment cards") }
+        var recordsJSON = try await webView.evaluateJavaScript("JSON.stringify(selected().attachments)") as! String
+        var records = try JSONDecoder().decode([FileAttachment].self, from: Data(recordsJSON.utf8))
+        guard records[0].name == filename, records[1].name == filename, records[0].path != records[1].path else { throw biweeklyError("Same-name files overwrote each other") }
+        try Data("changed source".utf8).write(to: first)
+        try fm.removeItem(at: sources)
+        guard try attachmentStore.data(records[0].path) == bytesA, try attachmentStore.data(records[1].path) == bytesB else { throw biweeklyError("Attachment was linked to its source instead of copied") }
+        _ = try await webView.evaluateJavaScript("""
+        (()=>{const transfer=new DataTransfer();transfer.items.add(new File(['{"ok":true}'],'dragged.json',{type:'application/json'}));document.querySelector('#attachment-section').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));return true;})()
+        """)
+        ready = false
+        for _ in 0..<60 {
+            if (try await webView.evaluateJavaScript("selected().attachments?.length===3 && pendingFileAttachments.size===0")) as? Bool == true { ready = true; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard ready else { throw biweeklyError("WebKit file drop did not copy its bytes into the managed folder") }
+        recordsJSON = try await webView.evaluateJavaScript("JSON.stringify(selected().attachments)") as! String
+        records = try JSONDecoder().decode([FileAttachment].self, from: Data(recordsJSON.utf8))
+        let text = try await webView.evaluateJavaScript("JSON.stringify(state)") as! String
+        let payload = try attachmentStore.backup(imageStore.backup(text))
+        let freshRoot = dataDirectory.appendingPathComponent("fresh-files-restore")
+        let freshFiles = AttachmentStore(root: freshRoot), freshImages = ImageStore(root: freshRoot)
+        let fileBackup = try freshFiles.prepareRestore(payload)
+        let remaining = String(data: try JSONSerialization.data(withJSONObject: fileBackup.state, options: .withoutEscapingSlashes), encoding: .utf8)!
+        let imageBackup = try freshImages.prepareRestore(remaining)
+        try freshFiles.install(fileBackup.files); try freshImages.install(imageBackup.images)
+        guard imageBackup.state["fileAttachments"] == nil, imageBackup.state["imageAttachments"] == nil else { throw biweeklyError("Binary backup payload leaked into task metadata") }
+        for file in records { guard try freshFiles.data(file.path) == attachmentStore.data(file.path) else { throw biweeklyError("Portable backup did not restore attachment bytes") } }
+        let repo = dataDirectory.appendingPathComponent("git-snapshot")
+        let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as! [String: Any]
+        try attachmentStore.copyReferencedFiles(object, to: repo)
+        try text.write(to: repo.appendingPathComponent("data.json"), atomically: true, encoding: .utf8)
+        let hydrated = try attachmentStore.hydrateBackup(text, beside: repo.appendingPathComponent("data.json"))
+        guard hydrated.contains("fileAttachments") else { throw biweeklyError("Git snapshot could not supply its attachment files on restore") }
+        for file in records { guard try Data(contentsOf: attachmentStore.file(file.path, base: repo)) == attachmentStore.data(file.path) else { throw biweeklyError("Git snapshot omitted an attachment") } }
+        let markdown = try await webView.evaluateJavaScript("MarkdownIO.exportMarkdown(current())") as! String
+        let target = dataDirectory.appendingPathComponent("exported-note.md")
+        let portable = try attachmentStore.portableMarkdown(imageStore.portableMarkdown(markdown), at: target)
+        guard !portable.contains(AttachmentStore.prefix), portable.contains("exported-note-attachments/") else { throw biweeklyError("Markdown attachment links were not portable") }
+        for file in records {
+            let value = try attachmentStore.parts(file.path)
+            let copied = dataDirectory.appendingPathComponent("exported-note-attachments").appendingPathComponent(value.hash).appendingPathComponent(file.name)
+            guard try Data(contentsOf: copied) == attachmentStore.data(file.path) else { throw biweeklyError("Markdown export lost a file") }
+        }
+        do { _ = try attachmentStore.file("attachments/../../secret"); throw biweeklyError("Unsafe attachment path was not rejected") }
+        catch { guard error.localizedDescription.contains("路径无效") else { throw error } }
     }
 
 }

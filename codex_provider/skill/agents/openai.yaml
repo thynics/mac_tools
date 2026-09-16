@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Provider Switch"
+  short_description: "Launch official or API Codex with shared task history"
+  default_prompt: "Use $codex-provider-switch to inspect the official and API entrypoints or resume a task with another provider."

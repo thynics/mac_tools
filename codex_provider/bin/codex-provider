@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+provider_root="${CODEX_HOME:-$HOME/.codex}"
+for provider_python in /opt/homebrew/bin/python3.12 /usr/local/bin/python3.12 python3.13 python3.12 python3.11 python3; do
+    if "$provider_python" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+        exec "$provider_python" "$provider_root/skills/codex-provider-switch/scripts/codex-provider" "$@"
+    fi
+done
+echo 'codex-provider requires Python 3.11 or newer.' >&2
+exit 1

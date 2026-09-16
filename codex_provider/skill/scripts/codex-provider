@@ -1,0 +1,930 @@
+#!/usr/bin/env python3
+"""Safely launch or resume one shared Codex home through explicit profiles."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import shlex
+import sqlite3
+import subprocess
+import sys
+import tomllib
+import uuid
+
+
+SKILL_NAME = "codex-provider-switch"
+PROFILE_FILES = {"api": "api", "official": "openai"}
+PROVIDER_IDS = {"api": "nvidia", "official": "openai"}
+PROVIDER_LABELS = {"nvidia": "api", "openai": "official"}
+MIN_PROFILE_VERSION = (0, 134, 0)
+INSTALLED_CODEX_HOME = Path(__file__).resolve().parents[3]
+FORBIDDEN_BASE_KEYS = {
+    "model_catalog_json",
+    "model_auto_compact_token_limit",
+    "model_auto_compact_token_limit_scope",
+    "model_reasoning_summary",
+    "openai_base_url",
+}
+
+
+class ProviderSwitchError(RuntimeError):
+    pass
+
+
+def resolve_codex_home() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    root = Path(configured).expanduser() if configured else Path.home() / ".codex"
+    return root.resolve()
+
+
+def codex_executable() -> str:
+    executable = shutil.which("codex")
+    if not executable:
+        for app in ("Codex", "ChatGPT"):
+            candidate = Path("/Applications") / f"{app}.app/Contents/Resources/codex"
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                executable = str(candidate)
+                break
+    if not executable:
+        raise ProviderSwitchError("codex is not available on PATH or in an installed Codex app")
+    return executable
+
+
+def read_toml(path: Path) -> dict:
+    if not path.is_file():
+        raise ProviderSwitchError(f"missing profile/config file: {path}")
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise ProviderSwitchError(f"invalid TOML in {path}: {exc}") from exc
+
+
+def profile_path(root: Path, alias: str) -> Path:
+    return root / f"{PROFILE_FILES[alias]}.config.toml"
+
+
+def parse_cli_version(executable: str) -> tuple[str, tuple[int, int, int] | None]:
+    result = subprocess.run(
+        [executable, "--version"], text=True, capture_output=True, check=False
+    )
+    rendered = (result.stdout or result.stderr).strip()
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", rendered)
+    parsed = tuple(int(part) for part in match.groups()) if match else None
+    return rendered, parsed
+
+
+def validate_layout(root: Path) -> list[str]:
+    errors: list[str] = []
+    if root != INSTALLED_CODEX_HOME:
+        errors.append(
+            f"resolved CODEX_HOME {root} differs from this skill's home {INSTALLED_CODEX_HOME}"
+        )
+    try:
+        base = read_toml(root / "config.toml")
+    except ProviderSwitchError as exc:
+        return [str(exc)]
+
+    leaked = sorted(FORBIDDEN_BASE_KEYS.intersection(base))
+    if leaked:
+        errors.append(
+            "base config contains profile-only keys: " + ", ".join(leaked)
+        )
+    if base.get("model_provider") != "openai":
+        errors.append(
+            f"bare codex must default to official provider 'openai', got {base.get('model_provider')!r}"
+        )
+    if "sqlite_home" in base:
+        configured_sqlite = Path(str(base["sqlite_home"])).expanduser().resolve()
+        if configured_sqlite != root:
+            errors.append(f"shared sqlite_home escapes CODEX_HOME: {configured_sqlite}")
+
+    for alias, expected_provider in PROVIDER_IDS.items():
+        path = profile_path(root, alias)
+        try:
+            profile = read_toml(path)
+        except ProviderSwitchError as exc:
+            errors.append(str(exc))
+            continue
+        actual_provider = profile.get("model_provider")
+        if actual_provider != expected_provider:
+            errors.append(
+                f"{path.name}: model_provider={actual_provider!r}, expected {expected_provider!r}"
+            )
+        if "sqlite_home" in profile:
+            errors.append(f"{path.name}: must not override sqlite_home")
+        if alias == "api":
+            provider = profile.get("model_providers", {}).get("nvidia", {})
+            if not provider:
+                errors.append(f"{path.name}: missing [model_providers.nvidia]")
+            elif not provider.get("env_key"):
+                errors.append(f"{path.name}: API provider must use env_key authentication")
+        else:
+            for mirrored_key in ("model", "model_provider", "model_reasoning_effort", "model_context_window"):
+                if base.get(mirrored_key) != profile.get(mirrored_key):
+                    errors.append(
+                        f"config.toml and {path.name} disagree on official default {mirrored_key}"
+                    )
+            if "model_catalog_json" in profile:
+                errors.append(f"{path.name}: official profile must not use a custom model catalog")
+            if "openai_base_url" in profile:
+                errors.append(f"{path.name}: official profile must not redirect openai_base_url")
+            if "openai" in profile.get("model_providers", {}):
+                errors.append(f"{path.name}: must use the built-in reserved openai provider")
+
+    skill_file = root / "skills" / SKILL_NAME / "SKILL.md"
+    if not skill_file.is_file():
+        errors.append(f"shared skill is missing: {skill_file}")
+    return errors
+
+
+def iter_rollouts(root: Path, include_archived: bool = False):
+    locations = [("active", root / "sessions")]
+    if include_archived:
+        locations.append(("archived", root / "archived_sessions"))
+    for state, directory in locations:
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*.jsonl"):
+            if path.is_file():
+                yield state, path
+
+
+def read_session_meta(path: Path) -> dict | None:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            first_line = handle.readline()
+        record = json.loads(first_line)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if record.get("type") != "session_meta" or not isinstance(record.get("payload"), dict):
+        return None
+    return record["payload"]
+
+
+def is_child_thread(meta: dict) -> bool:
+    source = meta.get("source")
+    if isinstance(source, dict):
+        return "subagent" in source or any(
+            key in source for key in ("parent_thread_id", "parentThreadId")
+        )
+    return bool(meta.get("parent_thread_id") or meta.get("parentThreadId"))
+
+
+def load_thread_names(root: Path) -> dict[str, str]:
+    names: dict[str, str] = {}
+    index_path = root / "session_index.jsonl"
+    if not index_path.is_file():
+        return names
+    try:
+        with index_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                thread_id = record.get("id")
+                name = record.get("thread_name")
+                if isinstance(thread_id, str) and isinstance(name, str):
+                    names[thread_id] = name
+    except OSError:
+        pass
+    return names
+
+
+def collect_threads(root: Path, include_archived: bool = False) -> list[dict]:
+    names = load_thread_names(root)
+    records: list[dict] = []
+    for state, path in iter_rollouts(root, include_archived=include_archived):
+        meta = read_session_meta(path)
+        if not meta:
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        thread_id = str(meta.get("id") or "")
+        provider = str(meta.get("model_provider") or meta.get("modelProvider") or "unknown")
+        records.append(
+            {
+                "id": thread_id,
+                "provider": provider,
+                "provider_alias": PROVIDER_LABELS.get(provider, provider),
+                "cwd": str(meta.get("cwd") or ""),
+                "created_at": str(meta.get("timestamp") or ""),
+                "updated_at_epoch": stat.st_mtime,
+                "name": names.get(thread_id, ""),
+                "child": is_child_thread(meta),
+                "state": state,
+                "path": str(path),
+                "size": stat.st_size,
+            }
+        )
+    return records
+
+
+def session_path(root: Path, thread_id: str) -> tuple[str, Path] | None:
+    matches: list[tuple[str, Path]] = []
+    for state, path in iter_rollouts(root, include_archived=True):
+        if thread_id in path.name:
+            matches.append((state, path))
+    if len(matches) > 1:
+        raise ProviderSwitchError(f"multiple rollout files match thread {thread_id}")
+    return matches[0] if matches else None
+
+
+def require_uuid(value: str) -> str:
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError as exc:
+        raise ProviderSwitchError(
+            "provider handoff requires an explicit thread UUID; names and --last are rejected"
+        ) from exc
+    canonical = str(parsed)
+    if canonical.lower() != value.lower():
+        raise ProviderSwitchError(f"use the canonical thread UUID: {canonical}")
+    return canonical
+
+
+def writer_is_active(root: Path, thread_id: str) -> bool:
+    lock_path = root / "thread-writer-locks" / f"{thread_id}.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        with lock_path.open("rb") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            finally:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    except OSError as exc:
+        raise ProviderSwitchError(f"cannot inspect writer lock {lock_path}: {exc}") from exc
+    return False
+
+
+def api_credential(root: Path, env_key: str | None) -> str | None:
+    """Read the existing credential without executing shell code or rewriting it."""
+    if not env_key:
+        return None
+    if env_key in os.environ:
+        return os.environ[env_key] or None
+    dotenv = root / ".env"
+    if not dotenv.is_file():
+        return None
+    value = None
+    for raw in dotenv.read_text().splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, separator, rhs = line.partition("=")
+        if not separator or key.strip() != env_key:
+            continue
+        try:
+            parts = shlex.split(rhs.strip(), comments=True, posix=True)
+        except ValueError as exc:
+            raise ProviderSwitchError(f"invalid {env_key} assignment in {dotenv}") from exc
+        if len(parts) > 1:
+            raise ProviderSwitchError(f"invalid {env_key} assignment in {dotenv}")
+        value = parts[0] if parts else None
+    return value
+
+
+def ensure_ready(root: Path, alias: str) -> None:
+    errors = validate_layout(root)
+    if errors:
+        raise ProviderSwitchError("configuration verification failed:\n  - " + "\n  - ".join(errors))
+    profile = read_toml(profile_path(root, alias))
+    if alias == "api":
+        env_key = profile["model_providers"]["nvidia"].get("env_key")
+        credential = api_credential(root, env_key)
+        if not credential:
+            raise ProviderSwitchError(f"API credential absent from environment and existing .env: {env_key}")
+        os.environ[env_key] = credential
+    elif not (root / "auth.json").is_file():
+        raise ProviderSwitchError("official ChatGPT auth cache is absent; run codex login deliberately")
+
+
+def reject_provider_overrides(codex_args: list[str]) -> None:
+    forbidden_config_roots = {
+        "model_provider",
+        "model_providers",
+        "model_catalog_json",
+        "openai_base_url",
+        "sqlite_home",
+        "profile",
+        "profiles",
+    }
+    index = 0
+    while index < len(codex_args):
+        argument = codex_args[index]
+        if argument == "--":
+            break
+        if (
+            argument in {"--profile", "-p", "--oss", "--local-provider"}
+            or argument.startswith("--profile=")
+            or argument.startswith("--local-provider=")
+            or (argument.startswith("-p") and argument != "-p")
+        ):
+            raise ProviderSwitchError(
+                f"provider-changing argument is not allowed through this launcher: {argument}"
+            )
+        config_value: str | None = None
+        if argument in {"-c", "--config"}:
+            if index + 1 < len(codex_args):
+                config_value = codex_args[index + 1]
+                index += 1
+        elif argument.startswith("--config="):
+            config_value = argument.split("=", 1)[1]
+        elif argument.startswith("-c") and argument != "-c":
+            config_value = argument[2:]
+        if config_value:
+            key = config_value.split("=", 1)[0].strip()
+            root_key = key.split(".", 1)[0]
+            if root_key in forbidden_config_roots:
+                raise ProviderSwitchError(
+                    f"provider/thread-store config override is not allowed: {key}"
+                )
+        index += 1
+
+
+def exec_profile(root: Path, alias: str, codex_args: list[str]) -> None:
+    reject_provider_overrides(codex_args)
+    if "--last" in codex_args:
+        raise ProviderSwitchError("--last is not allowed in provider handoff; use a thread UUID")
+    if codex_args and codex_args[0] == "resume":
+        exec_resume(root, alias, codex_args[1:])
+        return
+    if len(codex_args) >= 2 and codex_args[:2] == ["exec", "resume"]:
+        exec_resume(root, alias, codex_args[2:], non_interactive=True)
+        return
+    if "resume" in codex_args:
+        raise ProviderSwitchError(
+            "resume must use 'codex-provider resume <provider> <UUID>' or "
+            "'<provider> exec resume <UUID>'; options may follow the UUID"
+        )
+    ensure_ready(root, alias)
+    executable = codex_executable()
+    launch_codex(root, alias, executable, ["--profile", PROFILE_FILES[alias], *codex_args])
+
+
+def launch_codex(root: Path, alias: str, executable: str, arguments: list[str]) -> None:
+    if alias == "api":
+        from api_responses_compat import run_api_codex
+
+        provider = read_toml(profile_path(root, alias))["model_providers"]["nvidia"]
+        raise SystemExit(run_api_codex(executable, arguments, provider))
+    os.execv(executable, [executable, *arguments])
+
+
+def exec_resume(
+    root: Path,
+    alias: str,
+    resume_args: list[str],
+    non_interactive: bool = False,
+) -> None:
+    if not resume_args:
+        raise ProviderSwitchError("resume requires a thread UUID")
+    reject_provider_overrides(resume_args)
+    if "--last" in resume_args:
+        raise ProviderSwitchError("--last is not allowed in provider handoff; use a thread UUID")
+    thread_id = require_uuid(resume_args[0])
+    located = session_path(root, thread_id)
+    if not located:
+        database_inventory = state_db_inventory(root)
+        if thread_id in database_inventory.get("rows", {}):
+            raise ProviderSwitchError(
+                f"thread {thread_id} has state DB metadata but its rollout file is missing; "
+                "preserve the metadata and recover the rollout from backup before resume"
+            )
+        raise ProviderSwitchError(f"thread does not exist in shared CODEX_HOME: {thread_id}")
+    state, _ = located
+    if state == "archived":
+        raise ProviderSwitchError(
+            f"thread {thread_id} is archived; unarchive it explicitly before resume"
+        )
+    if writer_is_active(root, thread_id):
+        raise ProviderSwitchError(
+            f"thread {thread_id} still has an active writer; finish the turn and exit first"
+        )
+    ensure_ready(root, alias)
+    executable = codex_executable()
+    resume_command = ["exec", "resume"] if non_interactive else ["resume"]
+    launch_codex(
+        root,
+        alias,
+        executable,
+        [
+            "--profile",
+            PROFILE_FILES[alias],
+            *resume_command,
+            thread_id,
+            *resume_args[1:],
+        ],
+    )
+
+
+def format_timestamp(epoch: float) -> str:
+    return dt.datetime.fromtimestamp(epoch, tz=dt.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+
+
+def command_threads(root: Path, args: argparse.Namespace) -> None:
+    records = collect_threads(root, include_archived=args.archived)
+    if not args.include_children:
+        records = [record for record in records if not record["child"]]
+    if args.provider != "all":
+        expected = PROVIDER_IDS[args.provider]
+        records = [record for record in records if record["provider"] == expected]
+    if args.cwd:
+        selected_cwd = str(Path(args.cwd).expanduser().resolve())
+        records = [record for record in records if record["cwd"] == selected_cwd]
+    records.sort(key=lambda record: record["updated_at_epoch"], reverse=True)
+    records = records[: args.limit]
+    if args.json:
+        for record in records:
+            public = {key: value for key, value in record.items() if key != "updated_at_epoch"}
+            public["updated_at"] = format_timestamp(record["updated_at_epoch"])
+            print(json.dumps(public, ensure_ascii=False, sort_keys=True))
+        return
+    print("UPDATED           PROVIDER  THREAD UUID                           TITLE / CWD")
+    for record in records:
+        title = record["name"] or "(untitled)"
+        location = record["cwd"] or "(unknown cwd)"
+        suffix = " [archived]" if record["state"] == "archived" else ""
+        print(
+            f"{format_timestamp(record['updated_at_epoch']):17} "
+            f"{record['provider_alias'][:8]:8}  {record['id']:36}  "
+            f"{title} — {location}{suffix}"
+        )
+
+
+def command_status(root: Path) -> int:
+    executable = codex_executable()
+    rendered_version, parsed_version = parse_cli_version(executable)
+    records = collect_threads(root, include_archived=True)
+    print(f"codex: {executable} ({rendered_version})")
+    print(f"CODEX_HOME: {root}")
+    print(f"shared skill: {root / 'skills' / SKILL_NAME / 'SKILL.md'}")
+    base = read_toml(root / "config.toml")
+    print(
+        "bare codex default: "
+        f"provider={base.get('model_provider', '<default>')}, "
+        f"model={base.get('model', '<default>')}"
+    )
+    for alias in ("api", "official"):
+        path = profile_path(root, alias)
+        if path.is_file():
+            profile = read_toml(path)
+            print(
+                f"{alias} profile: {path} "
+                f"(provider={profile.get('model_provider', '<default>')}, "
+                f"model={profile.get('model', '<default>')})"
+            )
+        else:
+            print(f"{alias} profile: MISSING ({path})")
+    api_profile = profile_path(root, "api")
+    if api_profile.is_file():
+        profile = read_toml(api_profile)
+        env_key = profile.get("model_providers", {}).get("nvidia", {}).get("env_key")
+        present = bool(api_credential(root, env_key))
+        print(f"API credential: {env_key or '<unset>'}={'present' if present else 'absent'}")
+    print(f"official auth cache: {'present' if (root / 'auth.json').is_file() else 'absent'}")
+    root_count = sum(not item["child"] for item in records)
+    child_count = sum(item["child"] for item in records)
+    total_bytes = sum(item["size"] for item in records)
+    by_provider: dict[str, int] = {}
+    for item in records:
+        by_provider[item["provider_alias"]] = by_provider.get(item["provider_alias"], 0) + 1
+    provider_text = ", ".join(f"{key}={value}" for key, value in sorted(by_provider.items()))
+    print(
+        f"threads: total={len(records)}, roots={root_count}, children={child_count}, "
+        f"bytes={total_bytes / (1024 ** 3):.2f} GiB ({provider_text})"
+    )
+    database_inventory = state_db_inventory(root)
+    database_missing = 0
+    if database_inventory.get("available"):
+        database_missing = len(database_inventory["missing"])
+        print(
+            f"state DB: rows={len(database_inventory['rows'])}, "
+            f"missing_rollouts={database_missing}"
+        )
+        if database_missing:
+            print(
+                "status: WARNING: missing rollout files predate this provider migration; "
+                "do not clean their metadata before recovery is investigated"
+            )
+    elif database_inventory.get("error"):
+        print(f"state DB: unreadable ({database_inventory['error']})", file=sys.stderr)
+    errors = validate_layout(root)
+    if parsed_version is None or parsed_version < MIN_PROFILE_VERSION:
+        errors.append(
+            f"Codex >= {'.'.join(map(str, MIN_PROFILE_VERSION))} is required for profile files"
+        )
+    if errors:
+        print("status: FAILED", file=sys.stderr)
+        for error in errors:
+            print(f"  - {error}", file=sys.stderr)
+        return 1
+    if database_missing:
+        print("status: OK for provider switching; historical thread gaps remain")
+    else:
+        print("status: OK")
+    return 0
+
+
+def session_inventory(root: Path) -> dict[str, tuple[int, int]]:
+    inventory: dict[str, tuple[int, int]] = {}
+    for _, path in iter_rollouts(root, include_archived=True):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        inventory[str(path.relative_to(root))] = (stat.st_size, stat.st_mtime_ns)
+    return inventory
+
+
+def state_db_inventory(root: Path) -> dict:
+    database = root / "state_5.sqlite"
+    if not database.is_file():
+        return {"available": False, "rows": {}, "missing": []}
+    uri = f"file:{database}?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=5)
+        try:
+            query = "SELECT id, rollout_path, archived, model_provider, history_mode FROM threads"
+            rows = connection.execute(query).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        return {"available": False, "error": str(exc), "rows": {}, "missing": []}
+    indexed = {
+        str(row[0]): {
+            "rollout_path": str(row[1]),
+            "archived": bool(row[2]),
+            "provider": str(row[3]),
+            "history_mode": str(row[4]),
+        }
+        for row in rows
+    }
+    missing = [thread_id for thread_id, item in indexed.items() if not Path(item["rollout_path"]).is_file()]
+    return {"available": True, "rows": indexed, "missing": missing}
+
+
+def latest_snapshot_manifest(root: Path) -> tuple[Path, list[dict]] | None:
+    snapshot_root = root / "provider-switch-backups"
+    if not snapshot_root.is_dir():
+        return None
+    manifests = sorted(snapshot_root.glob("*/threads.manifest.jsonl"), reverse=True)
+    for manifest_path in manifests:
+        records: list[dict] = []
+        try:
+            with manifest_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    record = json.loads(line)
+                    if isinstance(record, dict) and record.get("session_meta_sha256"):
+                        records.append(record)
+        except (OSError, json.JSONDecodeError):
+            continue
+        return manifest_path, records
+    return None
+
+
+def current_session_meta_hashes(root: Path) -> set[str]:
+    hashes: set[str] = set()
+    for _, path in iter_rollouts(root, include_archived=True):
+        try:
+            with path.open("rb") as handle:
+                hashes.add(hashlib.sha256(handle.readline()).hexdigest())
+        except OSError:
+            continue
+    return hashes
+
+
+def inline_secret_findings(path: Path) -> list[str]:
+    if path.suffix != ".toml":
+        return []
+    data = read_toml(path)
+    findings: list[str] = []
+    safe_reference_keys = {
+        "env_key",
+        "env_vars",
+        "env_http_headers",
+        "bearer_token_env_var",
+        "remote_auth_token_env",
+        "remote_auth_token_env_var",
+    }
+
+    def walk(value, prefix: tuple[str, ...] = ()) -> None:
+        if isinstance(value, dict):
+            for raw_key, nested in value.items():
+                key = str(raw_key).lower().replace("-", "_")
+                location = prefix + (str(raw_key),)
+                if key in safe_reference_keys:
+                    continue
+                sensitive_key = (
+                    key == "env"
+                    or "password" in key
+                    or "secret" in key
+                    or "credential" in key
+                    or key in {"token", "api_key", "apikey", "authorization", "http_headers"}
+                    or key.endswith("_token")
+                )
+                if sensitive_key and nested not in (None, "", {}, []):
+                    findings.append(".".join(location))
+                    continue
+                walk(nested, location)
+        elif isinstance(value, list):
+            for index, nested in enumerate(value):
+                walk(nested, prefix + (str(index),))
+
+    walk(data)
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    for env_name, env_value in os.environ.items():
+        if (
+            env_value
+            and len(env_value) >= 8
+            and re.search(r"(?i)(key|token|secret|password|credential)", env_name)
+            and env_value in raw
+        ):
+            findings.append(f"literal value from environment variable {env_name}")
+    return sorted(set(findings))
+
+
+def command_verify(root: Path) -> int:
+    executable = codex_executable()
+    errors = validate_layout(root)
+    rendered_version, parsed_version = parse_cli_version(executable)
+    if parsed_version is None or parsed_version < MIN_PROFILE_VERSION:
+        errors.append(
+            f"unsupported CLI version {rendered_version!r}; profile files require >= 0.134.0"
+        )
+    before = session_inventory(root)
+    before_db = state_db_inventory(root)
+    skill_path = str(root / "skills" / SKILL_NAME / "SKILL.md")
+    skill_root = str(root / "skills")
+    relative_skill_path = f"{SKILL_NAME}/SKILL.md"
+    for alias in ("api", "official"):
+        if errors:
+            break
+        result = subprocess.run(
+            [
+                executable,
+                "--profile",
+                PROFILE_FILES[alias],
+                "debug",
+                "prompt-input",
+                f"Use ${SKILL_NAME} to check provider sharing.",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            errors.append(f"{alias}: prompt-input failed: {result.stderr.strip()}")
+        elif (
+            SKILL_NAME not in result.stdout
+            or relative_skill_path not in result.stdout
+            or skill_root not in result.stdout
+        ):
+            errors.append(
+                f"{alias}: shared skill/root mapping was not discovered for {skill_path}"
+            )
+        else:
+            print(f"{alias}: shared skill discovered at {skill_path}")
+    after = session_inventory(root)
+    after_db = state_db_inventory(root)
+    missing = sorted(set(before).difference(after))
+    if missing:
+        errors.append(f"session files disappeared during verification: {len(missing)}")
+    changed = [path for path in before.keys() & after.keys() if before[path] != after[path]]
+    if before_db.get("available") and after_db.get("available"):
+        removed_rows = sorted(set(before_db["rows"]).difference(after_db["rows"]))
+        if removed_rows:
+            errors.append(f"state DB thread rows disappeared during verification: {len(removed_rows)}")
+    snapshot = latest_snapshot_manifest(root)
+    if snapshot:
+        manifest_path, manifest_records = snapshot
+        current_hashes = current_session_meta_hashes(root)
+        lost_from_snapshot = [
+            record
+            for record in manifest_records
+            if record["session_meta_sha256"] not in current_hashes
+        ]
+        if lost_from_snapshot:
+            errors.append(
+                f"session identities missing from latest snapshot baseline: {len(lost_from_snapshot)}"
+            )
+        else:
+            print(
+                f"snapshot baseline: {len(manifest_records)} session identities preserved "
+                f"from {manifest_path.parent}"
+            )
+    if errors:
+        print("verify: FAILED", file=sys.stderr)
+        for error in errors:
+            print(f"  - {error}", file=sys.stderr)
+        return 1
+    if changed:
+        print(f"verify: note: {len(changed)} rollout(s) received concurrent updates")
+    existing_gap = len(after_db.get("missing", []))
+    if existing_gap:
+        print(
+            f"verify: warning: {existing_gap} pre-existing state DB row(s) lack rollout files; "
+            "provider switching did not remove them"
+        )
+    print(f"verify: OK ({len(before)} session files preserved; {rendered_version})")
+    return 0
+
+
+def command_snapshot(root: Path) -> None:
+    layout_errors = validate_layout(root)
+    if layout_errors:
+        raise ProviderSwitchError(
+            "snapshot refused because the provider-sharing contract is invalid:\n  - "
+            + "\n  - ".join(layout_errors)
+        )
+    timestamp = dt.datetime.now(tz=dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    candidates = [
+        root / "config.toml",
+        *sorted(root.glob("*.config.toml")),
+        root / "session_index.jsonl",
+    ]
+    secret_findings: list[str] = []
+    for candidate in candidates:
+        if candidate.is_file():
+            secret_findings.extend(
+                f"{candidate.name}:{finding}"
+                for finding in inline_secret_findings(candidate)
+            )
+    if secret_findings:
+        raise ProviderSwitchError(
+            "snapshot refused because inline credential-like TOML fields were found: "
+            + ", ".join(secret_findings)
+        )
+    database_inventory = state_db_inventory(root)
+    if (root / "state_5.sqlite").is_file() and not database_inventory.get("available"):
+        raise ProviderSwitchError(
+            "snapshot refused because state_5.sqlite could not be read: "
+            + str(database_inventory.get("error", "unknown error"))
+        )
+    snapshot_root = root / "provider-switch-backups"
+    snapshot_root.mkdir(mode=0o700, exist_ok=True)
+    snapshot_root.chmod(0o700)
+    destination = snapshot_root / timestamp
+    destination.mkdir(mode=0o700, exist_ok=False)
+    copied: list[str] = []
+    for path in candidates:
+        if path.is_file():
+            shutil.copy2(path, destination / path.name)
+            copied.append(path.name)
+    skill_directory = root / "skills" / SKILL_NAME
+    if skill_directory.is_dir():
+        shutil.copytree(skill_directory, destination / "skill")
+        copied.append("skill/")
+    launcher_directory = Path.home() / ".local" / "bin"
+    for launcher_name in ("codex-provider", "codex-api", "codex-official"):
+        launcher = launcher_directory / launcher_name
+        if launcher.is_file():
+            target = destination / "launchers"
+            target.mkdir(exist_ok=True)
+            shutil.copy2(launcher, target / launcher_name)
+            copied.append(f"launchers/{launcher_name}")
+    manifest_path = destination / "threads.manifest.jsonl"
+    counts = {"active": 0, "archived": 0}
+    total_bytes = 0
+    with manifest_path.open("x", encoding="utf-8") as manifest:
+        for state, path in iter_rollouts(root, include_archived=True):
+            stat = path.stat()
+            with path.open("rb") as handle:
+                first_line_hash = hashlib.sha256(handle.readline()).hexdigest()
+            record = {
+                "path": str(path.relative_to(root)),
+                "state": state,
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "session_meta_sha256": first_line_hash,
+            }
+            manifest.write(json.dumps(record, sort_keys=True) + "\n")
+            counts[state] += 1
+            total_bytes += stat.st_size
+    state_manifest_path = destination / "state-threads.manifest.jsonl"
+    missing_state_ids = set(database_inventory.get("missing", []))
+    with state_manifest_path.open("x", encoding="utf-8") as state_manifest:
+        for thread_id, record in sorted(database_inventory.get("rows", {}).items()):
+            public_record = {"id": thread_id, **record}
+            public_record["rollout_missing"] = thread_id in missing_state_ids
+            state_manifest.write(json.dumps(public_record, sort_keys=True) + "\n")
+    copied.append("state-threads.manifest.jsonl")
+    summary = {
+        "created_at": dt.datetime.now(tz=dt.timezone.utc).isoformat(),
+        "codex_home": str(root),
+        "copied_files": copied,
+        "session_counts": counts,
+        "session_bytes": total_bytes,
+        "state_db_rows": len(database_inventory.get("rows", {})),
+        "state_db_missing_rollouts": len(database_inventory.get("missing", [])),
+        "excluded_credential_files": ["auth.json", ".env"],
+        "inline_credential_scan": "passed",
+    }
+    with (destination / "snapshot.json").open("x", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    for saved_path in destination.rglob("*"):
+        saved_path.chmod(0o700 if saved_path.is_dir() else 0o600)
+    print(destination)
+
+
+def command_handoff(root: Path, alias: str, thread_id: str | None) -> None:
+    selected = thread_id or os.environ.get("CODEX_THREAD_ID")
+    if not selected:
+        raise ProviderSwitchError(
+            "no thread UUID supplied and CODEX_THREAD_ID is unavailable; pass the UUID explicitly"
+        )
+    selected = require_uuid(selected)
+    if not session_path(root, selected):
+        raise ProviderSwitchError(f"thread does not exist in shared CODEX_HOME: {selected}")
+    helper = root / "skills" / SKILL_NAME / "scripts" / "codex-provider"
+    print("Finish the current turn and exit this Codex process, then run:")
+    print(shlex.join([sys.executable, str(helper), "resume", alias, selected]))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="codex-provider",
+        description="Switch Codex providers per process while sharing one thread store.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for alias in ("api", "official"):
+        launch = subparsers.add_parser(alias, help=f"launch Codex with the {alias} profile")
+        launch.add_argument("codex_args", nargs=argparse.REMAINDER)
+    resume = subparsers.add_parser("resume", help="resume one UUID with a selected provider")
+    resume.add_argument("provider", choices=("api", "official"))
+    resume.add_argument("thread_uuid")
+    resume.add_argument("codex_args", nargs=argparse.REMAINDER)
+    threads = subparsers.add_parser("threads", help="list stored threads without resuming them")
+    threads.add_argument("--provider", choices=("all", "api", "official"), default="all")
+    threads.add_argument("--limit", type=int, default=30)
+    threads.add_argument("--cwd")
+    threads.add_argument("--include-children", action="store_true")
+    threads.add_argument("--archived", action="store_true")
+    threads.add_argument("--json", action="store_true")
+    subparsers.add_parser("status", help="show profiles, auth presence, and thread counts")
+    subparsers.add_parser("verify", help="offline-check both profiles and shared skill discovery")
+    subparsers.add_parser("snapshot", help="save non-secret config copies and a thread manifest")
+    handoff = subparsers.add_parser("handoff", help="print a safe resume command for another provider")
+    handoff.add_argument("provider", choices=("api", "official"))
+    handoff.add_argument("thread_uuid", nargs="?")
+    return parser
+
+
+def main() -> int:
+    root = resolve_codex_home()
+    raw_args = sys.argv[1:] or ["status"]
+    if raw_args and raw_args[0] in ("api", "official"):
+        exec_profile(root, raw_args[0], raw_args[1:])
+        return 0
+    if raw_args and raw_args[0] == "resume":
+        if len(raw_args) < 2 or raw_args[1] not in ("api", "official"):
+            raise ProviderSwitchError("resume requires provider api or official")
+        exec_resume(root, raw_args[1], raw_args[2:])
+        return 0
+    args = build_parser().parse_args(raw_args)
+    if args.command == "threads":
+        if args.limit < 1:
+            raise ProviderSwitchError("--limit must be positive")
+        command_threads(root, args)
+        return 0
+    if args.command == "status":
+        return command_status(root)
+    if args.command == "verify":
+        return command_verify(root)
+    if args.command == "snapshot":
+        command_snapshot(root)
+        return 0
+    if args.command == "handoff":
+        command_handoff(root, args.provider, args.thread_uuid)
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except ProviderSwitchError as exc:
+        print(f"codex-provider: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    except subprocess.TimeoutExpired:
+        print("codex-provider: offline verification timed out", file=sys.stderr)
+        raise SystemExit(2)

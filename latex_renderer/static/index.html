@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f5f5f0">
+    <meta name="description" content="在本机编译 LaTeX 项目，预览和下载论文 PDF。">
+    <title>Paper Studio</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="i-paper" viewBox="0 0 24 24"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M8 12h8M8 16h6"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8z"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="i-spinner" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14M10 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-6"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a1 1 0 0 1 1-1h5l3 3h8a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z"/></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 8 4 4-4 4m7 0h3"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18.5A1.7 1.7 0 0 0 3.3 21h17.4a1.7 1.7 0 0 0 1.5-2.5L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4m0 4h.01"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    </svg>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="项目导航">
+        <a class="brand" href="/" aria-label="Paper Studio 首页">
+          <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#i-paper"/></svg></span>
+          <span class="brand-name">Paper <span>Studio</span></span>
+          <span class="local-tag">LOCAL</span>
+        </a>
+
+        <div class="sidebar-intro">从源码，到纸面。</div>
+        <button class="import-button" id="import-button" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>
+          <span id="import-label">导入 Overleaf 项目</span>
+        </button>
+        <input id="zip-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden>
+        <p class="import-hint">选择 ZIP 文件，或拖入此窗口</p>
+
+        <div class="project-list-heading"><span>我的项目</span><span id="project-count" class="count">0</span></div>
+        <nav class="project-list" id="project-list" aria-label="项目列表"></nav>
+        <p class="no-projects" id="no-projects" hidden>你的论文会出现在这里。</p>
+
+        <div class="sidebar-footer">
+          <div class="runtime-line"><span id="runtime-dot" class="status-dot neutral"></span><span id="runtime-label">正在连接编译环境</span></div>
+          <p id="runtime-detail">文件与编译过程都在本机。</p>
+          <div class="footer-rule"></div>
+          <p class="private-note">专注写作，随时预览。</p>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div id="loading-view" class="welcome-view">
+          <svg class="icon loading-spinner" aria-hidden="true"><use href="#i-spinner"/></svg>
+          <p>正在连接本地编译服务…</p>
+        </div>
+
+        <div id="connection-error" class="welcome-view" hidden>
+          <div class="welcome-icon"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg></div>
+          <h1>暂时无法连接</h1>
+          <p id="connection-error-text">请确认本地编译服务正在运行。</p>
+          <button class="button primary" id="retry-button" type="button">重新连接</button>
+        </div>
+
+        <div id="welcome-view" class="welcome-view" hidden>
+          <div class="paper-illustration" aria-hidden="true"><div class="illustration-sheet sheet-back"></div><div class="illustration-sheet sheet-front"><span class="illustration-kicker"></span><span class="illustration-title"></span><span class="illustration-subtitle"></span><div class="illustration-columns"><span></span><span></span></div><span class="illustration-foot"></span></div><div class="illustration-check"><svg class="icon"><use href="#i-check"/></svg></div></div>
+          <p class="eyebrow">你的本地论文工作台</p>
+          <h1>让论文，成于纸面。</h1>
+          <p>导入 Overleaf 导出的 ZIP 项目，<br>在这里编译、预览和下载 PDF。</p>
+          <button class="button primary welcome-import" id="welcome-import" type="button"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>导入第一个项目</button>
+          <span class="welcome-caption">LaTeX · 本地编译 · 即时预览</span>
+        </div>
+
+        <section id="project-view" class="project-view" aria-label="论文工作区" hidden>
+          <header class="project-header">
+            <div class="project-heading">
+              <p class="eyebrow">论文工作台 <span class="eyebrow-separator">/</span> <span class="eyebrow-light">PROJECT</span></p>
+              <h1 id="project-title"></h1>
+            </div>
+            <button class="button subtle folder-button" id="reveal-button" type="button" title="在 Finder 中打开项目源码文件夹"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>打开源码文件夹</span></button>
+          </header>
+
+          <div class="compiler-bar">
+            <label class="select-field main-file-field"><span>主文档</span><select id="main-file-select" aria-label="主文档"></select></label>
+            <label class="select-field engine-field"><span>编译引擎</span><select id="engine-select" aria-label="编译引擎"></select></label>
+            <div class="compiler-spacer"></div>
+            <label class="watch-control" title="保存源文件后自动重新编译"><input type="checkbox" id="watch-toggle"><span class="switch" aria-hidden="true"></span><span>自动编译</span></label>
+            <button class="button primary compile-button" id="compile-button" type="button"><svg class="icon" id="compile-icon" aria-hidden="true"><use href="#i-play"/></svg><span id="compile-label">编译 PDF</span><kbd title="快捷键">⌘ ↵</kbd></button>
+          </div>
+
+          <div class="workspace-body">
+            <div id="runtime-warning" class="notice warning" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span>TeX 编译环境尚未就绪。准备完成后即可编译。</span></div>
+            <div id="source-warning" class="notice warning" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="source-warning-text"></span></div>
+            <div id="build-error" class="notice error" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="build-error-text"></span><button class="text-button" id="show-log-button" type="button">查看日志</button></div>
+
+            <section class="preview-card" aria-label="PDF 预览">
+              <div class="preview-toolbar">
+                <div class="preview-title"><svg class="icon" aria-hidden="true"><use href="#i-paper"/></svg><span>PDF 预览</span><span id="preview-badge" class="preview-badge" hidden></span></div>
+                <div class="preview-actions"><a id="open-pdf" class="icon-button" aria-label="在新标签页打开 PDF" title="在新标签页打开 PDF" target="_blank" rel="noopener noreferrer" hidden><svg class="icon" aria-hidden="true"><use href="#i-external"/></svg></a><a id="download-pdf" class="button small" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><span>下载 PDF</span></a></div>
+              </div>
+              <div class="preview-stage">
+                <iframe id="pdf-frame" title="论文 PDF 预览" hidden></iframe>
+                <div id="empty-preview" class="empty-preview"><span class="empty-paper"><svg class="icon" aria-hidden="true"><use href="#i-paper"/></svg></span><h2 id="empty-preview-title">预览即将呈现</h2><p id="empty-preview-description">选择主文档，点击「编译 PDF」。</p><span class="empty-preview-caption">你的下一篇论文，从这里开始。</span></div>
+              </div>
+              <div class="build-statusbar"><div class="build-status"><span id="build-dot" class="status-dot neutral"></span><span id="build-label" role="status" aria-live="polite">尚未编译</span><span id="build-duration" class="muted"></span></div><span id="pdf-updated" class="muted"></span></div>
+            </section>
+
+            <div class="inspectors">
+              <details class="inspector" id="log-details">
+                <summary><svg class="icon inspector-chevron" aria-hidden="true"><use href="#i-chevron"/></svg><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>编译日志</span><span id="log-summary" class="inspector-meta">尚未编译</span></summary>
+                <div class="log-panel"><div class="panel-toolbar"><span id="log-panel-status">编译输出</span><a id="full-log" class="text-button" target="_blank" rel="noopener noreferrer">打开完整日志<svg class="icon" aria-hidden="true"><use href="#i-external"/></svg></a></div><pre id="build-log" tabindex="0">编译后，这里会显示日志。</pre></div>
+              </details>
+              <details class="inspector" id="source-details">
+                <summary><svg class="icon inspector-chevron" aria-hidden="true"><use href="#i-chevron"/></svg><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg><span>项目文件</span><span id="file-count" class="inspector-meta">0 个文件</span><span class="read-only-tag">只读预览</span></summary>
+                <div class="source-hint">在编辑器中修改源文件；开启自动编译后，PDF 会随保存更新。</div>
+                <div class="source-panel"><div class="file-sidebar"><label class="file-search"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input id="file-filter" type="search" placeholder="查找文件" aria-label="查找项目文件" autocomplete="off"></label><div id="file-list" class="file-list" role="list" aria-label="项目文件"></div></div><div class="source-view"><div class="panel-toolbar"><span id="source-path">选择一个文件</span><button id="source-refresh" class="icon-button" type="button" aria-label="刷新源文件" title="重新读取源文件" disabled><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button></div><pre id="source-content" tabindex="0">在左侧选择文件，即可查看源码。</pre></div></div>
+              </details>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="drop-overlay" class="drop-overlay" hidden aria-hidden="true"><div class="drop-card"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg><h2>松开，导入你的论文</h2><p>支持 Overleaf 导出的 ZIP 项目</p></div></div>
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-relevant="additions"></div>
+  </body>
+</html>

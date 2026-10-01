@@ -2,7 +2,7 @@
 
 `enter.sh` 每次执行会选中 iTerm2 唯一窗口的第一个 tab，向该 tab 当前 pane 发送一次回车。iTerm2 未运行或窗口数不等于 1 时跳过。
 
-本机通过 `~/Library/LaunchAgents/com.longcheng.iterm-enter.plist` 每 600 秒运行一次；登录后自动恢复，电脑休眠时不执行。脚本使用 iTerm 原生 AppleScript 接口。
+本机通过 `~/Library/LaunchAgents/com.longcheng.iterm-enter.plist` 常驻运行 `repeat.sh`：立即执行一次，每次执行完成后等待 1 秒再执行；登录后自动恢复，电脑休眠时不执行。常驻循环避免 launchd 的启动限频影响短间隔执行。脚本使用 iTerm 原生 AppleScript 接口。
 
 手动执行一次：
 

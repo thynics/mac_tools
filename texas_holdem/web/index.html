@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101914"><title>River Club · 德州扑克</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#" aria-label="River Club 首页"><span class="brand-mark">♠</span><span>RIVER<span class="club">CLUB</span></span></a>
+    <div class="nav-caption">你的私人牌桌</div>
+    <button class="nav-item active" id="nav-table"><span>▦</span> 单机锦标赛 <span class="nav-dot"></span></button>
+    <button class="nav-item" id="nav-rules"><span>♧</span> 玩法与对手</button>
+    <div class="sidebar-note"><span class="tiny-star">✳</span><h3>每一手，都是博弈。</h3><p>读懂范围，掌控节奏。<br>和六种风格的高手过招。</p><div class="offline"><i></i> 完全离线 · 无需登录</div></div>
+    <div class="sidebar-bottom"><span class="mini-card">♠</span><div>本地玩家<small>保持冷静，享受牌局</small></div><span class="status-light"></span></div>
+  </aside>
+  <main>
+    <header class="topbar"><div class="breadcrumb">RIVER CLUB <span>/</span> 练习场</div><div class="top-actions"><span class="local-badge"><i></i> 本地运行</span><button class="icon-button" id="sound" aria-label="切换音效" title="切换音效">♪</button><button class="text-button" id="new-game">新建牌局 <span>↗</span></button></div></header>
+    <div class="page-heading"><div><div class="eyebrow">NO LIMIT TEXAS HOLD’EM</div><h1>单机锦标赛 <span class="heading-chip">高手场</span></h1><p>一副好牌只是开始，好的决策才能走到最后。</p></div><div class="session-stat"><span id="session-status">准备入座</span><strong id="session-total">初始筹码 1,000</strong></div></div>
+    <div class="game-layout">
+      <section class="table-column">
+        <div class="table-toolbar"><div><span class="live-dot"></span><strong id="table-label">主牌桌</strong><span class="toolbar-divider"></span><span id="hand-label">等待开局</span></div><div class="toolbar-right"><span id="blind-label">盲注 10 / 20</span><button id="speed" class="speed-button" title="调整 NPC 行动速度">1× 速度</button></div></div>
+        <div id="table-wrap" class="table-wrap">
+          <div class="felt"><div class="felt-inner"></div><span class="felt-wordmark">RIVER CLUB</span></div>
+          <div class="board-area"><div class="pot-label">TOTAL POT</div><div id="pot" class="pot">0</div><div class="community-cards" id="board"></div><div class="street-label" id="street-label">等待第一手好牌</div></div>
+          <div id="seats"></div>
+          <div id="table-notice" class="table-notice" aria-live="polite"></div>
+        </div>
+        <section class="action-panel" id="action-panel" aria-label="玩家操作"></section>
+        <div class="table-footnote"><span>♧ 不限注德州扑克 · 每人 1,000 初始筹码</span><span>F 弃牌 <kbd>空格</kbd> 过牌 / 跟注</span></div>
+      </section>
+      <aside class="insights">
+        <section class="insight-card tournament-card"><div class="panel-title">锦标赛概览 <span class="pill">LIVE</span></div><div class="tourney-stats"><div><strong id="remaining">—</strong><span>剩余玩家</span></div><div><strong id="my-rank">—</strong><span>我的排名</span></div><div><strong id="table-count">—</strong><span>进行中牌桌</span></div></div><div class="level-line"><span id="level-label">盲注等级 01</span><span id="level-next">每 8 手升级</span></div><div class="progress-track"><i id="level-progress"></i></div></section>
+        <section class="insight-card activity-card"><div class="panel-title">牌桌动态 <span class="muted" id="activity-count">本手记录</span></div><div id="activity" class="activity"><div class="empty-activity">牌局开始后，行动将在这里记录。</div></div></section>
+        <section class="insight-card observation-card"><div class="panel-title">桌边笔记 <span class="note-icon">✎</span></div><div id="observation"><h3>高手也有不同的风格</h3><p>均衡取值、位置施压、混合诈唬。观察他们的行动，找到你的机会。</p></div></section>
+      </aside>
+    </div>
+    <footer><span>只用虚拟筹码，专注决策本身。</span><span>CRAFTED FOR THE LOVE OF THE GAME <b>♠</b></span></footer>
+  </main>
+  <div class="modal-layer" id="setup-layer"><section class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title"><button class="modal-close" id="close-setup" aria-label="关闭">×</button><div class="modal-suit">♠</div><div class="eyebrow">WELCOME TO YOUR TABLE</div><h2 id="setup-title">好戏，从这一手开始。</h2><p class="modal-subtitle">一个人，也能打出精彩的牌局。</p><form id="setup-form"><label class="input-label" for="player-count">参赛总人数 <span>包括你在内</span></label><div class="count-input"><button type="button" id="count-minus" aria-label="减少人数">−</button><input id="player-count" type="number" min="2" step="1" value="6" required aria-describedby="count-hint"><button type="button" id="count-plus" aria-label="增加人数">+</button></div><div class="count-presets"><button type="button" data-count="2">单挑</button><button type="button" data-count="6" class="selected">6 人桌</button><button type="button" data-count="9">9 人桌</button><button type="button" data-count="27">27 人赛</button></div><p class="input-hint" id="count-hint">人数自由设置，超过 9 人自动分桌与合桌。</p><div class="setup-details"><div><span>初始筹码</span><strong>1,000 <small>/ 人</small></strong></div><div><span>初始盲注</span><strong>10 / 20</strong></div><div><span>NPC 等级</span><strong class="green-text">策略高手 ✧</strong></div></div><button type="submit" class="start-button" id="start-button">入座，开始对局 <span>→</span></button><div class="setup-error" id="setup-error" role="alert"></div><p class="modal-fineprint">筹码归零即出局 · 自动保存进度 · 无真实货币</p></form><button class="resume-button" id="resume-game" hidden>继续上次的牌局 →</button></section></div>
+  <div class="modal-layer" id="rules-layer" hidden><section class="rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-title"><button class="modal-close" id="close-rules" aria-label="关闭">×</button><div class="eyebrow">THE GAME PLAN</div><h2 id="rules-title">熟悉规则，也读懂对手。</h2><div class="rules-content"><h3>牌桌规则</h3><p>你与每个 NPC 均持有 1,000 筹码。用 2 张底牌和 5 张公共牌中的任意 5 张组成最大牌型。每手依次经过翻牌前、翻牌、转牌和河牌，采用不限注规则。</p><p>每桌最多 9 人。更多参赛者会分桌同步打牌，每手结束后重新平衡座位。你的筹码归零即结束；拿下所有筹码即可夺冠。盲注每 8 手递增。全押时自动拆分主池和边池，平局平分，余数筹码按庄家左侧顺序分配。</p><h3>牌型由大到小</h3><p>同花顺 › 四条 › 葫芦 › 同花 › 顺子 › 三条 › 两对 › 一对 › 高牌。A 可以组成 A2345 的最小顺子。</p><h3>高手的决策逻辑</h3><p>翻牌前结合起手牌、位置、筹码深度和加注压力构建范围；翻牌后通过蒙特卡洛抽样估算对公开行动范围的胜率，再与底池赔率比较，结合价值下注、混合诈唬和对手弃牌率行动。每位 NPC 使用相同级别的策略，风格参数各有侧重。NPC 只知道自己的底牌及公开信息。</p><div class="style-grid" id="style-grid"></div><p class="rules-note">“高手”为启发式策略与抽样 AI，并非 GTO 求解器。每手结束后，桌边笔记会展示一条 NPC 决策复盘。模拟仅使用虚拟筹码。</p><h3>操作与保存</h3><p>F 弃牌，空格过牌或跟注。加注金额是本轮累计下注目标；不足最小加注时仅可全押，短额全押不一定重新开放加注权。游戏在本机自动保存，可直接关闭窗口后继续。</p></div></section></div>
+  <script src="engine.js"></script><script src="ai.js"></script><script src="app.js"></script>
+</body></html>

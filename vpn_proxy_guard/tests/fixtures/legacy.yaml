@@ -1,0 +1,42 @@
+mixed-port: 8119
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: warning
+ipv6: false
+external-controller-unix: mihomo.sock
+tun:
+  enable: false
+dns:
+  enable: false
+proxies:
+  - { name: KIX-17, type: http, server: proxy17.corp.example, port: 3128 }
+  - { name: KIX-10, type: http, server: proxy10.corp.example, port: 3128 }
+proxy-groups:
+  - name: KIX
+    type: fallback
+    proxies:
+      - KIX-17
+      - KIX-10
+    url: https://api.openai.com/v1/models
+    interval: 300
+    lazy: true
+    timeout: 5000
+    max-failed-times: 1
+    expected-status: 200-406/408-499
+  - name: AUTO
+    type: fallback
+    proxies:
+      - KIX
+      - DIRECT
+    url: https://www.apple.com/library/test/success.html
+    interval: 60
+    lazy: false
+    timeout: 3000
+    max-failed-times: 1
+    expected-status: 200
+rules:
+  - DOMAIN-SUFFIX,nvidia.com,DIRECT
+  - DOMAIN-SUFFIX,microsoftonline.com,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - MATCH,AUTO

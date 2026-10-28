@@ -96,9 +96,20 @@ python3.12 vpn_proxy_guard/enable-codex-http.py --apply
 ```
 
 Configuration and launcher backups are saved under
-`$CODEX_HOME/backups/http-transport-*`. Existing running sessions keep their
-current provider/transport; stop and resume them, or restart the desktop app,
-before expecting the override to apply. The setup never stops running tasks.
+`$CODEX_HOME/backups/http-transport-*`. Existing chats retain their own provider
+ID, and the desktop app explicitly passes that ID when resuming them. Restarting
+the app alone therefore does **not** migrate old `openai` chats. Use the native
+resume API with `modelProvider: openai_http` and verify the persisted metadata.
+The following helper stops the desktop app, performs that migration without
+sending a prompt or editing history/SQLite, and reopens the app even on failure:
+
+```sh
+python3.12 vpn_proxy_guard/resume-codex-http.py --thread THREAD_UUID --report /tmp/http-migration.json
+python3.12 vpn_proxy_guard/resume-codex-http.py --thread THREAD_UUID --report /tmp/http-migration.json --apply
+```
+
+Repeat `--thread` for each affected chat. The default is a read-only preview;
+`--apply` interrupts active desktop requests and requires restart authorization.
 
 Source: [Codex provider transport selection](https://github.com/openai/codex/blob/main/codex-rs/core/src/client.rs),
 [reserved provider merging](https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/src/lib.rs).

@@ -72,3 +72,33 @@ process and the existing TLS connection.
 
 References: [Mihomo controller API](https://wiki.metacubex.one/api/),
 [system resolver implementation](https://github.com/MetaCubeX/mihomo/blob/v1.19.32/dns/system_common.go).
+
+## Model streams that close before completion
+
+Stopping watchdog restarts does not fix every Responses WebSocket failure. A
+real GPT-6 Astra request was observed reconnecting every 80–87 seconds even
+though the Mihomo process stayed running. Anonymous GETs and idle WebSocket
+connections did not reproduce that failure; they are insufficient validation.
+
+The optional HTTP setup uses the existing ChatGPT login and preserves the model,
+reasoning, tools, and API-provider profile. It defines `openai_http` with
+`name = "OpenAI"`, `requires_openai_auth = true`, and
+`supports_websockets = false`. Overriding that field on the reserved `openai`
+provider is ignored in current Codex versions. No custom destination or key is
+introduced. If the provider-switch launcher is installed, its layout checks are
+updated to accept this exact official HTTP configuration while still rejecting
+redirected or credential-based custom providers.
+
+```sh
+python3.12 vpn_proxy_guard/tests/test-codex-http.py
+python3.12 vpn_proxy_guard/enable-codex-http.py          # preview
+python3.12 vpn_proxy_guard/enable-codex-http.py --apply
+```
+
+Configuration and launcher backups are saved under
+`$CODEX_HOME/backups/http-transport-*`. Existing running sessions keep their
+current provider/transport; stop and resume them, or restart the desktop app,
+before expecting the override to apply. The setup never stops running tasks.
+
+Source: [Codex provider transport selection](https://github.com/openai/codex/blob/main/codex-rs/core/src/client.rs),
+[reserved provider merging](https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/src/lib.rs).
